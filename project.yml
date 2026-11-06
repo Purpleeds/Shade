@@ -1,0 +1,64 @@
+name: Shade
+options:
+  bundleIdPrefix: com.shadeapp
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Shade:
+    type: application
+    platform: iOS
+    sources:
+      - path: Shade
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleDisplayName: Shade
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: ""
+        UIApplicationSupportsIndirectInputEvents: true
+        UIRequiresFullScreen: true
+        UIStatusBarHidden: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSCameraUsageDescription: Shade applies your shaders to the live camera feed.
+        NSPhotoLibraryAddUsageDescription: Shade saves the photos you capture to your library.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Shade Recipe
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - com.shadeapp.recipe
+          - CFBundleTypeName: JSON
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.json
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.shadeapp.recipe
+            UTTypeDescription: Shade Recipe
+            UTTypeConformsTo:
+              - public.json
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - shade
+              public.mime-type:
+                - application/x-shade-recipe
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shadeapp.shade
+        PRODUCT_NAME: Shade
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_BITCODE: NO
+        SWIFT_STRICT_CONCURRENCY: minimal

@@ -1,0 +1,10 @@
+# Xcode (the project is generated from project.yml with XcodeGen)
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+build/
+Payload/
+*.ipa
+.DS_Store
+.swiftpm/

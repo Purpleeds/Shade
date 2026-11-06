@@ -1,0 +1,21 @@
+{
+  "format": "shade.recipe/1",
+  "name": "Watercolor",
+  "description": "Soft washes of color that bleed past pencil-thin outlines on textured paper.",
+  "author": "Claude",
+  "passes": [
+    { "effect": "kuwahara", "params": { "radius": 3, "spacing": 2.0 } },
+    {
+      "name": "Paper & bleed",
+      "code": "float4 shade(float2 uv, float2 res, float time, texture2d<float> tex, texture2d<float> orig, sampler smp, constant ShadeParams& P) {\n    float2 q = uv * float2(res.x / res.y, 1.0);\n    float2 warp = float2(fbm(q * 9.0), fbm(q * 9.0 + 7.3)) - 0.5;\n    float3 c = SRC(uv + warp * P.bleed * 0.02).rgb;\n    c = mix(float3(luma(c)), c, P.saturation);\n    float paper = fbm(q * 80.0) * 0.5 + fbm(q * 14.0) * 0.5;\n    float3 paperColor = float3(P.paper) * (0.9 + paper * 0.15);\n    float pigment = saturate(1.0 - luma(c) * 0.85);\n    float3 washed = mix(paperColor, c * paperColor, pigment * P.density + (1.0 - P.density) * 0.5);\n    float e = sobel(tex, smp, uv, float2(1.0) / res);\n    washed *= 1.0 - smoothstep(0.35, 0.9, e) * P.lines;\n    return float4(washed, 1.0);\n}",
+      "params": [
+        { "name": "bleed", "type": "float", "value": 1.0, "min": 0, "max": 3, "label": "Color bleed" },
+        { "name": "saturation", "type": "float", "value": 1.2, "min": 0, "max": 2 },
+        { "name": "density", "type": "float", "value": 0.8, "min": 0, "max": 1, "label": "Pigment density" },
+        { "name": "lines", "type": "float", "value": 0.45, "min": 0, "max": 1, "label": "Pencil lines" },
+        { "name": "paper", "type": "color", "value": [0.98, 0.96, 0.9] }
+      ]
+    },
+    { "effect": "vignette", "params": { "strength": 0.25, "color": "#E8DCC8" } }
+  ]
+}
