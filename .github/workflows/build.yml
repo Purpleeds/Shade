@@ -44,7 +44,6 @@ jobs:
 
       - name: Build (unsigned, Release, iphoneos)
         run: |
-          set -o pipefail
           xcodebuild \
             -project Shade.xcodeproj \
             -scheme Shade \
@@ -55,8 +54,11 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build | tee build/xcodebuild.log | grep -E "error:|warning: .*Shade/|BUILD (SUCCEEDED|FAILED)" || true
-          test -d build/DerivedData/Build/Products/Release-iphoneos/Shade.app
+            build > build/xcodebuild.log 2>&1 || true
+          grep -E "error:|warning: .*Shade/|BUILD (SUCCEEDED|FAILED)" build/xcodebuild.log || true
+          # A failed build can still leave a partial Shade.app behind, so check for success explicitly.
+          grep -q "BUILD SUCCEEDED" build/xcodebuild.log
+          test -x build/DerivedData/Build/Products/Release-iphoneos/Shade.app/Shade
 
       - name: Package IPA
         run: |

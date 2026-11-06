@@ -36,14 +36,23 @@ enum StyleAnalyzer {
         }
         let n = Float(colors.count)
 
-        let meanLuma = lumas.reduce(0, +) / n
-        let lumaStd = sqrt(lumas.reduce(0) { $0 + ($1 - meanLuma) * ($1 - meanLuma) } / n)
-        let meanColor = colors.reduce(SIMD3<Float>.zero, +) / n
-        let meanSaturation = colors.reduce(Float(0)) { acc, c in
-            let mx = max(c.x, max(c.y, c.z)), mn = min(c.x, min(c.y, c.z))
-            return acc + (mx > 0.001 ? (mx - mn) / mx : 0)
-        } / n
-        let warmth = max(-1, min(1, (meanColor.x - meanColor.z) * 2.5))
+        var lumaSum: Float = 0
+        var colorSum = SIMD3<Float>(0, 0, 0)
+        var saturationSum: Float = 0
+        for (i, c) in colors.enumerated() {
+            lumaSum += lumas[i]
+            colorSum += c
+            let mx: Float = Swift.max(c.x, Swift.max(c.y, c.z))
+            let mn: Float = Swift.min(c.x, Swift.min(c.y, c.z))
+            if mx > 0.001 { saturationSum += (mx - mn) / mx }
+        }
+        let meanLuma: Float = lumaSum / n
+        var variance: Float = 0
+        for l in lumas { variance += (l - meanLuma) * (l - meanLuma) }
+        let lumaStd: Float = (variance / n).squareRoot()
+        let meanColor: SIMD3<Float> = colorSum / n
+        let meanSaturation: Float = saturationSum / n
+        let warmth: Float = Swift.max(-1, Swift.min(1, (meanColor.x - meanColor.z) * 2.5))
 
         // Grain and edges from the luminance image.
         var residual: Float = 0
@@ -69,7 +78,9 @@ enum StyleAnalyzer {
             return s / Float(w * w)
         }
         let w = size / 8
-        let corners = (regionLuma(0, 0, w) + regionLuma(size - w, 0, w) + regionLuma(0, size - w, w) + regionLuma(size - w, size - w, w)) / 4
+        let cornerA: Float = regionLuma(0, 0, w) + regionLuma(size - w, 0, w)
+        let cornerB: Float = regionLuma(0, size - w, w) + regionLuma(size - w, size - w, w)
+        let corners: Float = (cornerA + cornerB) / 4
         let center = regionLuma(size / 2 - w, size / 2 - w, w * 2)
         let vignette = max(0, center - corners)
 
@@ -128,6 +139,11 @@ enum StyleAnalyzer {
 
     private static func luma(_ c: SIMD3<Float>) -> Float { 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z }
 
+    private static func distanceSquared(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
+        let d = a - b
+        return d.x * d.x + d.y * d.y + d.z * d.z
+    }
+
     private static func clamp(_ v: Float, _ lo: Float, _ hi: Float) -> Float { min(max(v, lo), hi) }
 
     private static func lerp3(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ t: SIMD3<Float>) -> SIMD3<Float> { a + (b - a) * t }
@@ -138,15 +154,18 @@ enum StyleAnalyzer {
         guard !sample.isEmpty else { return ([], 0) }
         // Seed with luminance quantiles for stable, well-spread starting points.
         let sorted = sample.sorted { luma($0) < luma($1) }
-        var centers = (0..<k).map { sorted[min(sorted.count - 1, ($0 * 2 + 1) * sorted.count / (2 * k))] }
+        var centers: [SIMD3<Float>] = []
+        for j in 0..<k {
+            let index: Int = Swift.min(sorted.count - 1, (j * 2 + 1) * sorted.count / (2 * k))
+            centers.append(sorted[index])
+        }
         var assignment = [Int](repeating: 0, count: sample.count)
         for _ in 0..<10 {
             for (i, c) in sample.enumerated() {
                 var best = 0
                 var bestD = Float.greatestFiniteMagnitude
                 for (j, center) in centers.enumerated() {
-                    let d = c - center
-                    let dist = (d * d).sum()
+                    let dist = distanceSquared(c, center)
                     if dist < bestD { bestD = dist; best = j }
                 }
                 assignment[i] = best
@@ -158,7 +177,8 @@ enum StyleAnalyzer {
         }
         var close = 0
         for c in sample {
-            let nearest = centers.map { ($0 - c) * ($0 - c) }.map { $0.sum() }.min() ?? 1
+            var nearest: Float = 1
+            for center in centers { nearest = Swift.min(nearest, distanceSquared(c, center)) }
             if nearest < 0.01 { close += 1 }
         }
         return (centers.sorted { luma($0) < luma($1) }, Float(close) / Float(sample.count))
