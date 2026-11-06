@@ -165,7 +165,7 @@ struct ContentView: View {
     private var presetStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(model.store.userRecipes.prefix(8) + Presets.all) { recipe in
+                ForEach(Array(model.store.userRecipes.prefix(8)) + Presets.all) { recipe in
                     Button { model.apply(recipe) } label: {
                         Text(recipe.name)
                             .font(.footnote.weight(.semibold))

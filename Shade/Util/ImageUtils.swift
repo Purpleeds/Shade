@@ -62,7 +62,7 @@ enum PhotoSaver {
         try? FileManager.default.removeItem(at: url)
     }
 
-    private static func save(_ change: @escaping () -> Void) async throws {
+    private static func save(_ change: @escaping @Sendable () -> Void) async throws {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else { throw SaveError.denied }
         try await PHPhotoLibrary.shared().performChanges(change)
