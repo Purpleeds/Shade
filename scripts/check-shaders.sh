@@ -8,13 +8,8 @@ cd "$(dirname "$0")/.."
 OUT=build/shader-check
 mkdir -p build
 
-if [[ "$(uname)" == "Darwin" ]]; then
-  SWIFTC=(xcrun -sdk macosx swiftc)
-else
-  SWIFTC=(swiftc)
-fi
-"${SWIFTC[@]}" -swift-version 5 -O Shade/Recipe/*.swift Tools/ShaderCheck/main.swift -o build/shadercheck
-./build/shadercheck "$OUT" Examples/*.shade
+swift build --package-path Packages/ShadeCore -c release --product shadercheck
+"$(swift build --package-path Packages/ShadeCore -c release --show-bin-path)/shadercheck" "$OUT" Examples/*.shade
 
 if ! diff -q PROMPT.md "$OUT/PROMPT.md" >/dev/null; then
   echo "::warning::PROMPT.md is out of date. Copy $OUT/PROMPT.md over it."

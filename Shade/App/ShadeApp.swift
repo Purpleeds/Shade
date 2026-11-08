@@ -9,8 +9,9 @@ struct ShadeApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
+                .environmentObject(model.looks)
                 .preferredColorScheme(.dark)
-                .onOpenURL { url in model.importRecipe(from: url) }
+                .onOpenURL { url in model.open(url) }
                 .onChange(of: scenePhase) { phase in model.handleScenePhase(phase) }
         }
     }

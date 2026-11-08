@@ -1,5 +1,5 @@
 import Metal
-import Photos
+import ShadeCore
 import UIKit
 
 enum ImageUtils {
@@ -23,9 +23,28 @@ enum ImageUtils {
         return UIImage(cgImage: cg)
     }
 
-    /// JPEG data sized for the Claude API (long edge <= 1568 px keeps tokens and latency reasonable).
-    static func jpegForClaude(_ image: UIImage) -> Data? {
-        resized(image, maxDimension: 1568).jpegData(compressionQuality: 0.85)
+    /// JPEG sized for the Claude API: long edge <= 1568 px keeps tokens, latency and upload size reasonable.
+    static func jpegForClaude(_ image: UIImage) throws -> Data {
+        guard let data = resized(image, maxDimension: 1568).jpegData(compressionQuality: 0.85) else {
+            throw ShadeError(.generationInvalidInput, "One of the images couldn't be converted for upload.")
+        }
+        return data
+    }
+
+    /// A small RGBA bitmap for the on-device style analyzer.
+    static func analysisBitmap(_ image: UIImage) throws -> RGBAImage {
+        let size = StyleAnalyzer.analysisSize
+        guard let cg = normalizedCGImage(image, maxDimension: 1024),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
+                                  space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+            throw ShadeError(.generationInvalidInput, "That image couldn't be read.")
+        }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: size, height: size))
+        guard let raw = ctx.data else { throw ShadeError(.generationInvalidInput, "That image couldn't be read.") }
+        let buffer = UnsafeBufferPointer(start: raw.bindMemory(to: UInt8.self, capacity: size * size * 4), count: size * size * 4)
+        return try RGBAImage(width: size, height: size, bytes: Array(buffer))
     }
 
     /// Reads a shared-storage `.bgra8Unorm` texture into a UIImage.
@@ -44,27 +63,5 @@ enum ImageUtils {
                                space: space, bitmapInfo: info, provider: provider, decode: nil, shouldInterpolate: false,
                                intent: .defaultIntent) else { return nil }
         return UIImage(cgImage: cg)
-    }
-}
-
-enum PhotoSaver {
-    enum SaveError: LocalizedError {
-        case denied
-        var errorDescription: String? { "Shade isn't allowed to add to your photo library. Enable it in Settings → Shade → Photos." }
-    }
-
-    static func save(image: UIImage) async throws {
-        try await save { _ = PHAssetChangeRequest.creationRequestForAsset(from: image) }
-    }
-
-    static func save(videoAt url: URL) async throws {
-        try await save { _ = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url) }
-        try? FileManager.default.removeItem(at: url)
-    }
-
-    private static func save(_ change: @escaping @Sendable () -> Void) async throws {
-        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard status == .authorized || status == .limited else { throw SaveError.denied }
-        try await PHPhotoLibrary.shared().performChanges(change)
     }
 }

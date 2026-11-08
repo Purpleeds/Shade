@@ -1,14 +1,16 @@
+import ShadeCore
 import SwiftUI
 
 struct SettingsView: View {
-    static let apiKeyAccount = "claude-api-key"
-
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("claudeModel") private var claudeModel = ClaudeClient.defaultModel
-    @AppStorage("claudeEffort") private var claudeEffort = ClaudeClient.defaultEffort
+    @AppStorage(GenerationSettings.modelDefaultsKey) private var claudeModel = GenerationSettings.defaultModel
+    @AppStorage(GenerationSettings.effortDefaultsKey) private var claudeEffort = GenerationSettings.defaultEffort
     @State private var apiKey = ""
     @State private var hasKey = false
-    @State private var saved = false
+    @State private var message: String?
+    @State private var error: ShadeError?
+
+    private let keyStore = KeychainSecretStore.claudeAPIKey
 
     var body: some View {
         NavigationStack {
@@ -18,36 +20,29 @@ struct SettingsView: View {
                         HStack {
                             Label("API key saved", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
                             Spacer()
-                            Button("Remove", role: .destructive) {
-                                Keychain.set(nil, for: Self.apiKeyAccount)
-                                hasKey = false
-                            }
+                            Button("Remove", role: .destructive) { removeKey() }
                         }
                     }
                     SecureField(hasKey ? "Replace key (sk-ant-…)" : "sk-ant-…", text: $apiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    Button("Save key") {
-                        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { return }
-                        hasKey = Keychain.set(trimmed, for: Self.apiKeyAccount)
-                        apiKey = ""
-                        saved = hasKey
-                    }
-                    .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
-                    if saved { Text("Saved to the iPhone Keychain.").font(.caption).foregroundStyle(.secondary) }
+                        .textContentType(.password)
+                    Button("Save key") { saveKey() }
+                        .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+                    if let error { Text(error.message).font(.caption).foregroundStyle(.red) }
                 } header: {
                     Text("Claude API key")
                 } footer: {
-                    Text("Create a key at console.anthropic.com → API Keys. It's stored only in this phone's Keychain and sent only to api.anthropic.com. Generating a shader typically costs a few cents.")
+                    Text("Create a key at console.anthropic.com → API Keys. It's stored only in this iPhone's Keychain (not synced or backed up to other devices) and sent only to api.anthropic.com. Generating a shader typically costs a few cents.")
                 }
 
                 Section {
                     Picker("Model", selection: $claudeModel) {
-                        ForEach(ClaudeClient.models) { Text($0.name).tag($0.id) }
+                        ForEach(GenerationSettings.models) { Text($0.name).tag($0.id) }
                     }
                     Picker("Effort", selection: $claudeEffort) {
-                        ForEach(ClaudeClient.efforts, id: \.self) { Text($0.capitalized).tag($0) }
+                        ForEach(GenerationSettings.efforts, id: \.self) { Text($0.capitalized).tag($0) }
                     }
                 } header: {
                     Text("Shader generation")
@@ -65,7 +60,44 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
-            .onAppear { hasKey = Keychain.get(Self.apiKeyAccount) != nil }
+            .onAppear(perform: refresh)
+        }
+    }
+
+    private func refresh() {
+        do {
+            hasKey = try keyStore.read() != nil
+        } catch {
+            hasKey = false
+            self.error = ShadeError.wrap(error, as: .storageReadFailed, "Couldn't read the saved key.")
+        }
+        // Repair settings that no longer exist (e.g. a removed model) so the pickers show a real choice.
+        let valid = GenerationSettings(model: claudeModel, effort: claudeEffort)
+        if valid.model.id != claudeModel { claudeModel = valid.model.id }
+        if valid.effort != claudeEffort { claudeEffort = valid.effort }
+    }
+
+    private func saveKey() {
+        do {
+            try keyStore.save(apiKey)
+            apiKey = ""
+            hasKey = true
+            error = nil
+            message = "Saved to the iPhone Keychain."
+        } catch {
+            self.error = ShadeError.wrap(error, as: .storageWriteFailed, "Couldn't save the key.")
+            message = nil
+        }
+    }
+
+    private func removeKey() {
+        do {
+            try keyStore.delete()
+            hasKey = false
+            message = "Key removed."
+            error = nil
+        } catch {
+            self.error = ShadeError.wrap(error, as: .storageDeleteFailed, "Couldn't remove the key.")
         }
     }
 }

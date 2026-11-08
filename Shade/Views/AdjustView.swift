@@ -1,55 +1,82 @@
+import ShadeCore
 import SwiftUI
 
-/// Live editing of the current recipe: sliders/colors per pass, enable/mix, reorder, add built-ins, edit code.
+/// Live editing of the active look: sliders/colors per pass, enable/mix, reorder, add built-ins, edit code.
 struct AdjustView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var looks: LookStore
     @Environment(\.dismiss) private var dismiss
     @State private var editingPass: ShaderPass.ID?
     @State private var showSaveAs = false
     @State private var saveName = ""
 
+    private var recipe: Binding<ShaderRecipe> { looks.recipeBinding }
+
     var body: some View {
         NavigationStack {
             List {
-                if model.recipe.passes.isEmpty {
+                if looks.look.isModified {
+                    Section {
+                        HStack {
+                            Label("Unsaved changes", systemImage: "pencil.circle").font(.subheadline)
+                            Spacer()
+                            if looks.canRevert {
+                                Button("Revert") { looks.revert() }.font(.subheadline)
+                            }
+                        }
+                    }
+                }
+                if looks.recipe.passes.isEmpty {
                     Text("No effects yet. Add one below, or create a look with AI.")
                         .foregroundStyle(.secondary)
                 }
-                ForEach($model.recipe.passes) { $pass in
+                ForEach(recipe.passes) { $pass in
                     PassSection(pass: $pass, editCode: { editingPass = pass.id }, move: { move(pass.id, by: $0) },
-                                delete: { model.recipe.passes.removeAll { $0.id == pass.id } })
+                                delete: { recipe.wrappedValue.passes.removeAll { $0.id == pass.id } })
                 }
 
                 Section {
                     Menu {
                         ForEach(BuiltInEffects.all) { fx in
-                            Button(fx.displayName) { model.recipe.passes.append(ShaderPass(effect: fx.id)) }
+                            Button(fx.displayName) { add(ShaderPass(effect: fx.id)) }
                         }
                         Divider()
                         Button("Custom Metal code") {
                             let pass = ShaderPass(name: "Custom", code: AdjustView.customTemplate, params: [.float("amount", 0.5, 0, 1)])
-                            model.recipe.passes.append(pass)
+                            add(pass)
                             editingPass = pass.id
                         }
                     } label: {
                         Label("Add effect", systemImage: "plus.circle.fill")
                     }
+                    .disabled(looks.recipe.passes.count >= RecipeLimits.maxPasses)
+                } footer: {
+                    if looks.recipe.passes.count >= RecipeLimits.maxPasses {
+                        Text("A look can have up to \(RecipeLimits.maxPasses) effects.")
+                    }
                 }
             }
-            .navigationTitle(model.recipe.name)
+            .navigationTitle(looks.recipe.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        Button { model.saveCurrent() } label: { Label("Save", systemImage: "square.and.arrow.down") }
                         Button {
-                            saveName = model.recipe.name
+                            model.attempt("The look couldn't be saved.") {
+                                let saved = try looks.save()
+                                model.showToast("Saved “\(saved.name)”")
+                            }
+                        } label: { Label("Save", systemImage: "square.and.arrow.down") }
+                        Button {
+                            saveName = looks.recipe.name
                             showSaveAs = true
                         } label: { Label("Save as…", systemImage: "plus.square.on.square") }
                         Button {
-                            UIPasteboard.general.string = model.recipe.jsonString
-                            model.showToast("Recipe JSON copied")
+                            model.attempt("The recipe couldn't be copied.") {
+                                UIPasteboard.general.string = try RecipeCodec.encodedString(looks.recipe)
+                                model.showToast("Recipe JSON copied")
+                            }
                         } label: { Label("Copy JSON", systemImage: "doc.on.doc") }
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -57,13 +84,18 @@ struct AdjustView: View {
                 }
             }
             .sheet(item: Binding(get: { editingPass.map(EditTarget.init) }, set: { editingPass = $0?.id })) { target in
-                if let index = model.recipe.passes.firstIndex(where: { $0.id == target.id }) {
-                    CodeEditorView(pass: $model.recipe.passes[index])
+                if let index = looks.recipe.passes.firstIndex(where: { $0.id == target.id }) {
+                    CodeEditorView(pass: recipe.passes[index])
                 }
             }
             .alert("Save as", isPresented: $showSaveAs) {
                 TextField("Name", text: $saveName)
-                Button("Save") { model.saveCurrent(as: saveName.isEmpty ? model.recipe.name : saveName) }
+                Button("Save") {
+                    model.attempt("The look couldn't be saved.") {
+                        let saved = try looks.saveAsNew(named: saveName.isEmpty ? looks.recipe.name : saveName)
+                        model.showToast("Saved “\(saved.name)”")
+                    }
+                }
                 Button("Cancel", role: .cancel) {}
             }
         }
@@ -71,11 +103,16 @@ struct AdjustView: View {
 
     struct EditTarget: Identifiable { let id: ShaderPass.ID }
 
+    private func add(_ pass: ShaderPass) {
+        guard looks.recipe.passes.count < RecipeLimits.maxPasses else { return }
+        recipe.wrappedValue.passes.append(pass)
+    }
+
     private func move(_ id: ShaderPass.ID, by offset: Int) {
-        guard let i = model.recipe.passes.firstIndex(where: { $0.id == id }) else { return }
-        let j = i + offset
-        guard model.recipe.passes.indices.contains(j) else { return }
-        model.recipe.passes.swapAt(i, j)
+        var passes = looks.recipe.passes
+        guard let i = passes.firstIndex(where: { $0.id == id }), passes.indices.contains(i + offset) else { return }
+        passes.swapAt(i, i + offset)
+        recipe.wrappedValue.passes = passes
     }
 
     static let customTemplate = """

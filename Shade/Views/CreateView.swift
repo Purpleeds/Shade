@@ -1,11 +1,13 @@
 import PhotosUI
+import ShadeCore
 import SwiftUI
 
 /// The three ways to make a new look from a reference image or video.
 struct CreateView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var looks: LookStore
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var generator = ShaderGenerator()
+    @StateObject private var generation = GenerationController()
 
     enum Method: String, CaseIterable, Identifiable {
         case claude = "Claude"
@@ -19,11 +21,15 @@ struct CreateView: View {
     @State private var media = ReferenceMedia()
     @State private var loadingMedia = false
     @State private var notes = ""
-    @State private var localError: String?
+    @State private var localError: ShadeError?
     @State private var showSettings = false
+    @State private var onDeviceResult: ShaderRecipe?
+    @State private var hasAPIKey = KeychainSecretStore.claudeAPIKey.hasValue
 
-    @AppStorage("claudeModel") private var claudeModel = ClaudeClient.defaultModel
-    @AppStorage("claudeEffort") private var claudeEffort = ClaudeClient.defaultEffort
+    @AppStorage(GenerationSettings.modelDefaultsKey) private var claudeModel = GenerationSettings.defaultModel
+    @AppStorage(GenerationSettings.effortDefaultsKey) private var claudeEffort = GenerationSettings.defaultEffort
+
+    private var settings: GenerationSettings { GenerationSettings(model: claudeModel, effort: claudeEffort) }
 
     var body: some View {
         NavigationStack {
@@ -44,7 +50,7 @@ struct CreateView: View {
                 }
 
                 if let localError {
-                    Section { Text(localError).foregroundStyle(.red).font(.callout) }
+                    Section { Text(localError.message).foregroundStyle(.red).font(.callout) }
                 }
             }
             .navigationTitle("Create a look")
@@ -52,13 +58,14 @@ struct CreateView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
-                        generator.cancel()
+                        generation.cancel()
                         dismiss()
                     }
                 }
             }
             .onChange(of: items) { newItems in loadMedia(newItems) }
-            .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showSettings, onDismiss: { hasAPIKey = KeychainSecretStore.claudeAPIKey.hasValue }) { SettingsView() }
+            .onDisappear { generation.cancel() }
         }
     }
 
@@ -102,12 +109,13 @@ struct CreateView: View {
         guard !newItems.isEmpty else { return }
         loadingMedia = true
         localError = nil
+        onDeviceResult = nil
         Task {
             do {
                 media = try await ReferenceMedia.load(from: newItems)
-                if media.isEmpty { localError = "Couldn't load that selection." }
             } catch {
-                localError = "Couldn't load that selection: \(error.localizedDescription)"
+                media = ReferenceMedia()
+                localError = ShadeError.wrap(error, as: .generationInvalidInput, "Couldn't load that selection.")
             }
             loadingMedia = false
         }
@@ -125,50 +133,48 @@ struct CreateView: View {
         }
 
         Section {
-            if Keychain.get(SettingsView.apiKeyAccount) == nil {
+            if !hasAPIKey {
                 Button("Add your Claude API key") { showSettings = true }
             }
-            if generator.isRunning {
+            if generation.isRunning {
                 HStack(spacing: 12) {
                     ProgressView()
-                    Text(generator.status).foregroundStyle(.secondary)
+                    Text(generation.status).foregroundStyle(.secondary)
                 }
-                Button("Cancel", role: .destructive) { generator.cancel() }
+                Button("Cancel", role: .destructive) { generation.cancel() }
             } else {
                 Button {
                     generate()
                 } label: {
                     Label("Generate shader", systemImage: "sparkles").bold()
                 }
-                .disabled(media.isEmpty && notes.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(loadingMedia || (media.isEmpty && notes.trimmingCharacters(in: .whitespaces).isEmpty))
             }
         } footer: {
-            Text("Uses \(ClaudeClient.displayName(for: claudeModel)), effort \(claudeEffort). Change in Settings.")
+            Text("Uses \(settings.model.name), effort \(settings.effort). Change in Settings.")
         }
 
-        if let error = generator.errorMessage {
+        if let error = generation.error {
             Section("Problem") {
-                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                Text(error.message).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                if error.code == .claudeMissingKey || error.code == .claudeUnauthorized {
+                    Button("Open Settings") { showSettings = true }
+                }
             }
         }
 
-        if let recipe = generator.result {
-            resultSection(recipe, explanation: generator.explanation)
+        if let result = generation.result {
+            resultSection(result.recipe, explanation: result.explanation)
         }
     }
 
     private func generate() {
         localError = nil
-        guard let key = Keychain.get(SettingsView.apiKeyAccount), !key.isEmpty else {
-            showSettings = true
+        guard let compiler = model.shaderCompiler else {
+            localError = ShadeError(.cameraUnavailable, "Metal isn't available on this device.")
             return
         }
-        guard let device = model.renderer?.device else {
-            localError = "Metal isn't available on this device."
-            return
-        }
-        let client = ClaudeClient(apiKey: key, model: claudeModel, effort: claudeEffort)
-        generator.generate(media: media, notes: notes, client: client, device: device)
+        generation.generate(media: media, notes: notes, settings: settings, compiler: compiler)
     }
 
     private func resultSection(_ recipe: ShaderRecipe, explanation: String?) -> some View {
@@ -180,27 +186,38 @@ struct CreateView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Button {
-                let stored = (try? model.store.save(recipe)) ?? recipe
-                model.apply(stored)
-                model.useCamera()
-                dismiss()
+                use(recipe, previewOnReference: false)
             } label: {
                 Label("Use this look", systemImage: "camera.filters").bold()
             }
-            Button {
-                let stored = (try? model.store.save(recipe)) ?? recipe
-                model.apply(stored)
-                if let image = media.images.first { model.useStillImage(image) }
-                dismiss()
-            } label: {
-                Label("Preview on the reference", systemImage: "photo")
+            if !media.isEmpty {
+                Button {
+                    use(recipe, previewOnReference: true)
+                } label: {
+                    Label("Preview on the reference", systemImage: "photo")
+                }
             }
         }
     }
 
-    // MARK: On-device
+    /// Saves the result to the library and applies it. If saving fails the look is still applied
+    /// (as unsaved work) and the user is told why.
+    private func use(_ recipe: ShaderRecipe, previewOnReference: Bool) {
+        do {
+            try looks.addAndApply(recipe)
+        } catch {
+            looks.apply(recipe)
+            model.alert = ShadeError.wrap(error, as: .storageWriteFailed, "The look is applied but couldn't be saved to your library.")
+        }
+        if previewOnReference, let image = media.images.first {
+            model.useStillImage(image)
+        } else {
+            model.useCamera()
+        }
+        dismiss()
+    }
 
-    @State private var onDeviceResult: ShaderRecipe?
+    // MARK: On-device
 
     @ViewBuilder
     private var onDeviceSection: some View {
@@ -208,12 +225,16 @@ struct CreateView: View {
         Section {
             Button {
                 guard let image = media.images.first else { return }
-                onDeviceResult = StyleAnalyzer.recipe(from: image)
-                if onDeviceResult == nil { localError = "Couldn't analyze that image." }
+                do {
+                    onDeviceResult = try StyleAnalyzer.recipe(from: ImageUtils.analysisBitmap(image))
+                    localError = nil
+                } catch {
+                    localError = ShadeError.wrap(error, as: .generationInvalidInput, "Couldn't analyze that image.")
+                }
             } label: {
                 Label("Match style", systemImage: "wand.and.stars").bold()
             }
-            .disabled(media.isEmpty)
+            .disabled(media.isEmpty || loadingMedia)
         }
         if let recipe = onDeviceResult {
             resultSection(recipe, explanation: "Built from the image's colors and tone. Fine-tune it with Adjust.")
@@ -241,18 +262,25 @@ struct CreateView: View {
         }
         Section("3. Bring the result back") {
             Button {
-                guard let text = UIPasteboard.general.string, !text.isEmpty else {
-                    localError = "The clipboard is empty. Copy Claude's whole reply first."
-                    return
-                }
-                if let error = model.importRecipe(fromText: text) {
-                    localError = error + "\n\nTip: ask Claude to fix it, mentioning this error, then copy its new reply."
-                } else {
-                    dismiss()
-                }
+                pasteReply()
             } label: {
                 Label("Paste Claude's reply", systemImage: "doc.on.clipboard").bold()
             }
+        }
+    }
+
+    private func pasteReply() {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else {
+            localError = ShadeError(.recipeInvalidJSON, "The clipboard is empty. Copy Claude's whole reply first.")
+            return
+        }
+        do {
+            let recipe = try looks.importText(text)
+            model.showToast("Imported “\(recipe.name)”")
+            dismiss()
+        } catch {
+            let shade = ShadeError.wrap(error, as: .recipeInvalid, "That reply couldn't be imported.")
+            localError = ShadeError(shade.code, shade.message + "\n\nTip: tell Claude about this error and copy its corrected reply.")
         }
     }
 }

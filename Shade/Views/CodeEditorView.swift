@@ -1,3 +1,4 @@
+import ShadeCore
 import SwiftUI
 
 /// Edits a pass's Metal code and parameter definitions. Built-in passes are shown read-only until copied.
@@ -27,12 +28,7 @@ struct CodeEditorView: View {
                 switch tab {
                 case 0: editor($code)
                 case 1:
-                    VStack(alignment: .leading) {
-                        editor($paramsJSON)
-                        if let paramsError {
-                            Text(paramsError).font(.caption).foregroundStyle(.red).padding(.horizontal)
-                        }
-                    }
+                    editor($paramsJSON)
                 default:
                     ScrollView {
                         Text(Self.help)
@@ -40,6 +36,14 @@ struct CodeEditorView: View {
                             .textSelection(.enabled)
                             .padding()
                     }
+                }
+
+                if let paramsError {
+                    Text(paramsError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
                 }
 
                 if !model.compileErrors.isEmpty {
@@ -98,18 +102,24 @@ struct CodeEditorView: View {
     }
 
     private func apply() {
+        let params: [ShaderParam]
         do {
-            let params = try JSONDecoder().decode([ShaderParam].self, from: Data(paramsJSON.utf8))
-            paramsError = nil
-            var copy = pass
-            copy.code = code
-            copy.params = params
-            copy.normalize()
-            pass = copy
-            load()
+            params = try JSONDecoder().decode([ShaderParam].self, from: Data(paramsJSON.utf8))
         } catch {
             paramsError = "Params JSON is invalid: \(error.localizedDescription)"
+            return
         }
+        var copy = pass
+        copy.code = code
+        copy.params = params
+        copy.normalize()
+        if let problem = RecipeValidator.problem(in: copy) {
+            paramsError = "Can't apply: \(problem)"
+            return
+        }
+        paramsError = nil
+        pass = copy
+        load()
     }
 
     static let help = """

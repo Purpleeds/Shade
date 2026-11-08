@@ -1,67 +1,128 @@
 import Combine
+import Metal
+import ShadeCore
 import SwiftUI
 import UIKit
 
+/// Composition root and device-session state: wires the camera, renderer, shader compiler and
+/// `LookStore` together, and owns capture plus user-facing notices.
 @MainActor
 final class AppModel: ObservableObject {
-    enum CameraState { case unknown, running, denied, unavailable }
-
-    @Published var recipe: ShaderRecipe {
-        didSet {
-            renderer?.setRecipe(recipe)
-            persistCurrent()
-        }
+    enum CameraState: Equatable {
+        case starting
+        case running
+        case denied
+        case unavailable(String)
+        case interrupted(String)
     }
+
+    struct Notice: Identifiable, Equatable {
+        let id = UUID()
+        let message: String
+    }
+
     @Published private(set) var compileErrors: [String] = []
-    @Published private(set) var cameraState: CameraState = .unknown
+    @Published private(set) var cameraState: CameraState = .starting
     @Published private(set) var stillImage: UIImage?
     @Published private(set) var isRecording = false
     @Published private(set) var recordingStarted: Date?
-    @Published var toast: String?
+    /// Short confirmations ("Photo saved"). Shown as a toast.
+    @Published private(set) var toast: String?
+    /// Problems the user should read. Shown as an alert.
+    @Published var alert: ShadeError?
 
-    let store = RecipeStore()
+    let looks: LookStore
     let renderer: Renderer?
-    let camera = CameraManager()
+    let camera = CameraService()
+    private var cancellables: Set<AnyCancellable> = []
     private var toastTask: Task<Void, Never>?
-    private var storeObserver: AnyCancellable?
-
-    private static let currentKey = "currentRecipe"
+    private var isSavingCapture = false
 
     init() {
-        renderer = Renderer()
-        if let data = UserDefaults.standard.data(forKey: AppModel.currentKey), let saved = try? ShaderRecipe.decode(data) {
-            recipe = saved
+        TemporaryFiles.sweep()
+        looks = LookStore()
+
+        var renderer: Renderer?
+        var startupError: ShadeError?
+        if let device = MTLCreateSystemDefaultDevice() {
+            do {
+                renderer = try Renderer(device: device)
+            } catch {
+                startupError = ShadeError.wrap(error, as: .cameraUnavailable, "This device's GPU couldn't be set up.")
+            }
         } else {
-            recipe = Presets.all[1]
+            startupError = ShadeError(.cameraUnavailable, "This device doesn't support Metal.")
         }
-        storeObserver = store.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        self.renderer = renderer
+
+        if let problems = Optional(looks.libraryProblems), !problems.isEmpty {
+            Log.storage.warning("\(problems.count) library file(s) could not be loaded")
+        }
+        looks.onStorageError = { [weak self] error in self?.alert = error }
+
         guard let renderer else {
-            cameraState = .unavailable
+            cameraState = .unavailable(startupError?.message ?? "Metal is unavailable.")
             return
         }
         renderer.attach(to: camera)
         renderer.onCompileErrors = { [weak self] errors in self?.compileErrors = errors }
-        renderer.setRecipe(recipe)
+        renderer.onGPUFault = { [weak self] error, involvedCustomCode in
+            if involvedCustomCode { self?.looks.disableCustomPasses() }
+            self?.alert = error
+        }
+        renderer.onRecordingFailed = { [weak self] error in
+            self?.finishRecordingState()
+            self?.alert = error
+        }
+        renderer.onRecordingReachedLimit = { [weak self] url in
+            self?.finishRecordingState()
+            self?.saveVideo(at: url, note: "Recording reached 10 minutes and was saved")
+        }
+        camera.onStatus = { [weak self] status in self?.cameraStatusChanged(status) }
+
+        // The renderer follows the active look. @Published emits on willSet, so this receives the new value.
+        looks.$look
+            .map(\.recipe)
+            .removeDuplicates()
+            .sink { [weak renderer] recipe in renderer?.setRecipe(recipe) }
+            .store(in: &cancellables)
     }
 
-    // MARK: Camera / source
+    /// The GPU compiler, shared with AI generation so validated shaders are reused.
+    var shaderCompiler: ShaderCompiling? { renderer?.compiler }
 
-    func startCamera() {
+    // MARK: Lifecycle
+
+    func start() {
         guard renderer != nil else { return }
-        camera.start { [weak self] granted in
-            self?.cameraState = granted ? .running : .denied
-        }
+        camera.start()
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
-        case .active: camera.resume()
+        case .active:
+            camera.resume()
+            looks.reloadLibrary()
         case .background:
             if isRecording { toggleRecording() }
             camera.stop()
-        default: break
+            looks.flush()
+        default:
+            break
         }
     }
+
+    private func cameraStatusChanged(_ status: CameraService.Status) {
+        switch status {
+        case .idle: break
+        case .running: cameraState = .running
+        case .denied: cameraState = .denied
+        case .unavailable(let message): cameraState = .unavailable(message)
+        case .interrupted(let message): cameraState = .interrupted(message)
+        }
+    }
+
+    // MARK: Source
 
     func flipCamera() {
         if stillImage != nil { useCamera() }
@@ -69,104 +130,64 @@ final class AppModel: ObservableObject {
     }
 
     func useStillImage(_ image: UIImage) {
-        stillImage = image
-        renderer?.setStillImage(image)
+        do {
+            try renderer?.setStillImage(image)
+            stillImage = image
+        } catch {
+            alert = ShadeError.wrap(error, as: .generationInvalidInput, "That photo couldn't be used.")
+        }
     }
 
     func useCamera() {
+        try? renderer?.setStillImage(nil) // clearing can't fail
         stillImage = nil
-        renderer?.setStillImage(nil)
     }
 
-    // MARK: Recipes
+    // MARK: Opening files
 
-    func apply(_ newRecipe: ShaderRecipe) {
-        recipe = newRecipe
-    }
-
-    /// Imports a recipe from free text (a Claude reply, JSON, clipboard). Saves it to the library and applies it.
-    @discardableResult
-    func importRecipe(fromText text: String) -> String? {
+    func open(_ url: URL) {
         do {
-            let parsed = try ShaderRecipe.extract(from: text)
-            if let problem = parsed.structuralProblems.first { return problem }
-            let stored = (try? store.save(parsed.duplicated())) ?? parsed
-            recipe = stored
-            showToast("Imported “\(stored.name)”")
-            return nil
+            let recipe = try looks.importFile(at: url)
+            showToast("Imported “\(recipe.name)”")
         } catch {
-            return error.localizedDescription
+            alert = ShadeError.wrap(error, as: .recipeInvalid, "\(url.lastPathComponent) couldn't be imported.")
         }
-    }
-
-    func importRecipe(from url: URL) {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else {
-            showToast("Couldn't read \(url.lastPathComponent)")
-            return
-        }
-        if let error = importRecipe(fromText: String(decoding: data, as: UTF8.self)) {
-            showToast(error)
-        }
-    }
-
-    /// Saves the current (possibly edited) recipe: overwrites user recipes, copies presets.
-    func saveCurrent(as name: String? = nil) {
-        var toSave = recipe
-        if !store.isUserRecipe(recipe) || name != nil {
-            toSave = recipe.duplicated(named: name ?? (store.isUserRecipe(recipe) ? recipe.name : "\(recipe.name) (edited)"))
-        }
-        do {
-            recipe = try store.save(toSave)
-            showToast("Saved “\(recipe.name)”")
-        } catch {
-            showToast("Save failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func persistCurrent() {
-        UserDefaults.standard.set(recipe.jsonData(pretty: false), forKey: AppModel.currentKey)
     }
 
     // MARK: Capture
 
     func capturePhoto() {
         guard let renderer else { return }
-        renderer.capturePhoto { [weak self] image in
-            guard let image else {
-                self?.showToast("Nothing to capture yet")
-                return
-            }
-            Task { [weak self] in
-                do {
-                    try await PhotoSaver.save(image: image)
-                    self?.showToast("Photo saved")
-                } catch {
-                    self?.showToast(error.localizedDescription)
+        renderer.capturePhoto { [weak self] result in
+            switch result {
+            case .failure(let error):
+                self?.alert = error
+            case .success(let image):
+                Task { [weak self] in
+                    do {
+                        try await PhotoLibrarySaver.save(image: image)
+                        self?.showToast("Photo saved")
+                    } catch {
+                        self?.alert = ShadeError.wrap(error, as: .captureFailed, "The photo couldn't be saved.")
+                    }
                 }
             }
         }
     }
 
     func toggleRecording() {
-        guard let renderer else { return }
+        guard let renderer, !isSavingCapture else { return }
         if isRecording {
-            isRecording = false
-            recordingStarted = nil
-            renderer.stopRecording { [weak self] url in
-                guard let url else {
-                    self?.showToast("Recording failed")
-                    return
+            finishRecordingState()
+            isSavingCapture = true
+            Task { [weak self] in
+                do {
+                    let url = try await renderer.stopRecording()
+                    self?.saveVideo(at: url, note: "Video saved")
+                } catch {
+                    self?.alert = ShadeError.wrap(error, as: .captureFailed, "The recording couldn't be saved.")
                 }
-                Task { [weak self] in
-                    do {
-                        try await PhotoSaver.save(videoAt: url)
-                        self?.showToast("Video saved")
-                    } catch {
-                        self?.showToast(error.localizedDescription)
-                    }
-                }
+                self?.isSavingCapture = false
             }
         } else {
             do {
@@ -174,12 +195,28 @@ final class AppModel: ObservableObject {
                 isRecording = true
                 recordingStarted = Date()
             } catch {
-                showToast("Couldn't start recording: \(error.localizedDescription)")
+                alert = ShadeError.wrap(error, as: .captureFailed, "Recording couldn't start.")
             }
         }
     }
 
-    // MARK: Toasts
+    private func finishRecordingState() {
+        isRecording = false
+        recordingStarted = nil
+    }
+
+    private func saveVideo(at url: URL, note: String) {
+        Task { [weak self] in
+            do {
+                try await PhotoLibrarySaver.save(videoAt: url)
+                self?.showToast(note)
+            } catch {
+                self?.alert = ShadeError.wrap(error, as: .captureFailed, "The video couldn't be saved.")
+            }
+        }
+    }
+
+    // MARK: Notices
 
     func showToast(_ message: String) {
         toast = message
@@ -188,6 +225,15 @@ final class AppModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
             self?.toast = nil
+        }
+    }
+
+    /// Runs a throwing UI action and turns failures into an alert.
+    func attempt(_ fallbackMessage: String, _ action: () throws -> Void) {
+        do {
+            try action()
+        } catch {
+            alert = ShadeError.wrap(error, as: .storageWriteFailed, fallbackMessage)
         }
     }
 }

@@ -1,8 +1,10 @@
 import PhotosUI
+import ShadeCore
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var looks: LookStore
 
     enum ActiveSheet: String, Identifiable {
         case library, adjust, create, settings
@@ -51,12 +53,17 @@ struct ContentView: View {
             .padding(.bottom, 8)
             .animation(.easeInOut(duration: 0.2), value: model.toast)
         }
-        .onAppear { model.startCamera() }
+        .onAppear { model.start() }
         .onChange(of: sourceItem) { item in
             guard let item else { return }
             Task {
-                if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
+                do {
+                    guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else {
+                        throw ShadeError(.generationInvalidInput, "That photo couldn't be loaded.")
+                    }
                     model.useStillImage(image)
+                } catch {
+                    model.alert = ShadeError.wrap(error, as: .generationInvalidInput, "That photo couldn't be loaded.")
                 }
                 sourceItem = nil
             }
@@ -69,6 +76,11 @@ struct ContentView: View {
             case .settings: SettingsView()
             }
         }
+        .alert("Something went wrong", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.alert?.message ?? "")
+        }
         .statusBarHidden()
     }
 
@@ -78,7 +90,7 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Button { sheet = .library } label: {
                 HStack(spacing: 6) {
-                    Text(model.recipe.name).font(.headline).lineLimit(1)
+                    Text(looks.recipe.name + (looks.look.isModified ? " •" : "")).font(.headline).lineLimit(1)
                     Image(systemName: "chevron.down").font(.caption.weight(.bold))
                 }
                 .padding(.horizontal, 14)
@@ -155,26 +167,39 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
             }
             .padding(32)
-        case .unavailable:
-            Text("This device doesn't support Metal.").foregroundStyle(.secondary)
+        case .unavailable(let message) where model.stillImage == nil:
+            statusCard(icon: "video.slash", title: "Camera unavailable", message: message)
+        case .interrupted(let message) where model.stillImage == nil:
+            statusCard(icon: "pause.circle", title: "Camera paused", message: message)
         default:
             EmptyView()
         }
     }
 
+    private func statusCard(icon: String, title: String, message: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: icon).font(.largeTitle)
+            Text(title).font(.headline)
+            Text(message).font(.subheadline).multilineTextAlignment(.center).foregroundStyle(.secondary)
+        }
+        .padding(24)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .padding(32)
+    }
+
     private var presetStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(Array(model.store.userRecipes.prefix(8)) + Presets.all) { recipe in
-                    Button { model.apply(recipe) } label: {
+                ForEach(Array(looks.library.prefix(8)) + Presets.all) { recipe in
+                    Button { looks.apply(recipe) } label: {
                         Text(recipe.name)
                             .font(.footnote.weight(.semibold))
                             .lineLimit(1)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
-                            .background(recipe.id == model.recipe.id ? AnyShapeStyle(Color.white) : AnyShapeStyle(Material.ultraThinMaterial),
+                            .background(recipe.id == looks.recipe.id ? AnyShapeStyle(Color.white) : AnyShapeStyle(Material.ultraThinMaterial),
                                         in: Capsule())
-                            .foregroundStyle(recipe.id == model.recipe.id ? Color.black : Color.white)
+                            .foregroundStyle(recipe.id == looks.recipe.id ? Color.black : Color.white)
                     }
                 }
             }

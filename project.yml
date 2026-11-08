@@ -4,6 +4,9 @@ options:
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
+packages:
+  ShadeCore:
+    path: Packages/ShadeCore
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -15,6 +18,9 @@ targets:
     platform: iOS
     sources:
       - path: Shade
+    dependencies:
+      - package: ShadeCore
+        product: ShadeCore
     info:
       path: Support/Info.plist
       properties:

@@ -1,68 +1,97 @@
 import AVFoundation
 import CoreVideo
 import Metal
+import ShadeCore
 
-/// Records the processed frames to an H.264 .mov file (video only).
-/// `encodeFrame` is called from the render loop (main thread); appends happen on a private serial queue.
+/// Records processed frames to an H.264 .mov in the temp folder (video only).
+///
+/// - The writer is created up front, so setup problems are reported when recording starts,
+///   not discovered when it stops.
+/// - Writer failures mid-recording (e.g. disk full) are exposed through `failure`; the renderer
+///   checks it every frame and stops.
+/// - Recordings are capped at `maximumDuration` so a forgotten recording can't fill the phone.
+/// - The temp file is deleted on cancel and after saving (by `PhotoLibrarySaver`).
+///
+/// Threading: `encodeFrame` runs on the main thread (render loop); appends happen on a private serial queue.
 final class VideoRecorder {
+    static let minimumFreeBytes: Int64 = 300_000_000
+    static let maximumDuration: TimeInterval = 10 * 60
+
     let url: URL
-    private let device: MTLDevice
+    private let writer: AVAssetWriter
+    private let input: AVAssetWriterInput
+    private let adaptor: AVAssetWriterInputPixelBufferAdaptor
     private var textureCache: CVMetalTextureCache?
     private let queue = DispatchQueue(label: "shade.video-recorder")
+    private let startTime = CACurrentMediaTime()
+    private let log = Log.capture
 
-    private var writer: AVAssetWriter?
-    private var input: AVAssetWriterInput?
-    private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
-    private var startTime: CFTimeInterval = 0
-    private var finished = false // only touched on `queue`
-    private(set) var framesWritten = 0
+    // Guarded by `stateLock`.
+    private let stateLock = NSLock()
+    private var finished = false
+    private var framesWritten = 0
+    private var _failure: ShadeError?
 
-    init(device: MTLDevice) throws {
-        self.device = device
-        url = FileManager.default.temporaryDirectory.appendingPathComponent("Shade-\(UUID().uuidString).mov")
-        CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
+    var failure: ShadeError? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _failure
     }
 
-    private func setUp(width: Int, height: Int) throws {
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
-        let settings: [String: Any] = [
+    var duration: TimeInterval { CACurrentMediaTime() - startTime }
+
+    init(device: MTLDevice, width rawWidth: Int, height rawHeight: Int) throws {
+        let width = rawWidth & ~1
+        let height = rawHeight & ~1
+        guard width >= 16, height >= 16 else {
+            throw ShadeError(.captureFailed, "The camera isn't ready yet.", detail: "\(rawWidth)x\(rawHeight)")
+        }
+        url = TemporaryFiles.url(prefix: "Shade-", extension: "mov")
+        do {
+            writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        } catch {
+            throw ShadeError(.captureFailed, "Recording couldn't start.", detail: String(describing: error))
+        }
+        input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
             AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: width * height * 6]
-        ]
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        ])
         input.expectsMediaDataInRealTime = true
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+        adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferWidthKey as String: width,
             kCVPixelBufferHeightKey as String: height,
             kCVPixelBufferMetalCompatibilityKey as String: true
         ])
-        guard writer.canAdd(input) else { throw CocoaError(.fileWriteUnknown) }
+        guard writer.canAdd(input) else {
+            throw ShadeError(.captureFailed, "Recording couldn't start.", detail: "writer rejected input")
+        }
         writer.add(input)
-        guard writer.startWriting() else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+        guard writer.startWriting() else {
+            throw ShadeError(.captureFailed, "Recording couldn't start.", detail: String(describing: writer.error))
+        }
         writer.startSession(atSourceTime: .zero)
-        self.writer = writer
-        self.input = input
-        self.adaptor = adaptor
-        startTime = CACurrentMediaTime()
+        CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
+        log.info("recording started \(width)x\(height)")
     }
 
     func encodeFrame(from texture: MTLTexture, commandBuffer: MTLCommandBuffer, pipeline: MTLRenderPipelineState) {
-        if writer == nil {
-            do { try setUp(width: texture.width & ~1, height: texture.height & ~1) } catch { return }
+        if writer.status == .failed {
+            setFailure(ShadeError(.captureFailed, "Recording stopped unexpectedly. Is the iPhone out of storage?",
+                                  detail: String(describing: writer.error)))
+            return
         }
-        guard let writer, let input, let adaptor, writer.status == .writing, input.isReadyForMoreMediaData,
-              let pool = adaptor.pixelBufferPool, let cache = textureCache else { return }
+        guard writer.status == .writing, input.isReadyForMoreMediaData,
+              let pool = adaptor.pixelBufferPool, let cache = textureCache else { return } // drop this frame
 
         var pixelBuffer: CVPixelBuffer?
         CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pixelBuffer)
         guard let pixelBuffer else { return }
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
         var cvTexture: CVMetalTexture?
-        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, pixelBuffer, nil, .bgra8Unorm, width, height, 0, &cvTexture)
+        CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, pixelBuffer, nil, .bgra8Unorm,
+                                                  CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer), 0, &cvTexture)
         guard let cvTexture, let target = CVMetalTextureGetTexture(cvTexture) else { return }
 
         let rpd = MTLRenderPassDescriptor()
@@ -77,32 +106,77 @@ final class VideoRecorder {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
 
-        let time = CMTime(seconds: CACurrentMediaTime() - startTime, preferredTimescale: 600)
-        commandBuffer.addCompletedHandler { [weak self] _ in
-            guard let self else { return }
-            self.queue.async {
+        let time = CMTime(seconds: duration, preferredTimescale: 600)
+        let writer = self.writer, input = self.input, adaptor = self.adaptor
+        commandBuffer.addCompletedHandler { [weak self] buffer in
+            guard buffer.status == .completed else { return }
+            self?.queue.async {
                 _ = cvTexture
-                guard !self.finished, writer.status == .writing, input.isReadyForMoreMediaData else { return }
-                if adaptor.append(pixelBuffer, withPresentationTime: time) { self.framesWritten += 1 }
+                guard let self, !self.isFinished, writer.status == .writing, input.isReadyForMoreMediaData else { return }
+                if adaptor.append(pixelBuffer, withPresentationTime: time) {
+                    self.stateLock.lock()
+                    self.framesWritten += 1
+                    self.stateLock.unlock()
+                }
             }
         }
     }
 
-    /// Finishes the file. `completion` gets the movie URL (or nil if nothing was recorded) on the main thread.
-    func finish(_ completion: @escaping (URL?) -> Void) {
-        queue.async {
-            self.finished = true
-            guard let writer = self.writer, let input = self.input, writer.status == .writing, self.framesWritten > 0 else {
-                self.writer?.cancelWriting()
-                DispatchQueue.main.async { completion(nil) }
-                return
-            }
-            input.markAsFinished()
-            let url = self.url
-            writer.finishWriting {
-                let ok = writer.status == .completed
-                DispatchQueue.main.async { completion(ok ? url : nil) }
+    /// Finishes the file and returns its URL. Throws if nothing was recorded or writing failed.
+    func finish() async throws -> URL {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+            queue.async {
+                self.stateLock.lock()
+                self.finished = true
+                let frames = self.framesWritten
+                self.stateLock.unlock()
+
+                guard self.writer.status == .writing, frames > 0 else {
+                    let detail = "status \(self.writer.status.rawValue), frames \(frames), \(String(describing: self.writer.error))"
+                    self.discard()
+                    continuation.resume(throwing: ShadeError(.captureFailed, "The recording was empty or failed.", detail: detail))
+                    return
+                }
+                self.input.markAsFinished()
+                self.writer.finishWriting {
+                    if self.writer.status == .completed {
+                        self.log.info("recording finished: \(frames) frames")
+                        continuation.resume(returning: self.url)
+                    } else {
+                        let detail = String(describing: self.writer.error)
+                        self.discard()
+                        continuation.resume(throwing: ShadeError(.captureFailed, "The recording couldn't be saved.", detail: detail))
+                    }
+                }
             }
         }
+    }
+
+    /// Stops without saving and deletes the temp file.
+    func cancel() {
+        queue.async {
+            self.stateLock.lock()
+            self.finished = true
+            self.stateLock.unlock()
+            self.discard()
+        }
+    }
+
+    private var isFinished: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return finished
+    }
+
+    private func setFailure(_ error: ShadeError) {
+        stateLock.lock()
+        if _failure == nil { _failure = error }
+        stateLock.unlock()
+        log.error("recording failed: \(error)")
+    }
+
+    private func discard() {
+        if writer.status == .writing { writer.cancelWriting() }
+        try? FileManager.default.removeItem(at: url)
     }
 }

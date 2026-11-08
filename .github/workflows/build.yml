@@ -33,6 +33,9 @@ jobs:
       - name: Make sure the Metal toolchain is installed
         run: xcodebuild -downloadComponent MetalToolchain || true
 
+      - name: ShadeCore unit tests
+        run: swift test --package-path Packages/ShadeCore
+
       - name: Check shaders (generate + offline Metal compile)
         run: ./scripts/check-shaders.sh
 
