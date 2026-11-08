@@ -86,11 +86,42 @@ Recipes are stored as `.shade` files in **Files → On My iPhone → Shade → R
 
 ## How it works
 
-- `Shade/Camera`: AVFoundation capture, 1080p portrait BGRA frames.
-- `Shade/Rendering`: a Metal renderer. Camera frames become textures without a copy (`CVMetalTextureCache`), run through each pass into half-float ping-pong textures, then go to the screen, a photo, or an H.264 video.
-- `Shade/Recipe`: the recipe model, built-in effects and presets (pure Swift + Foundation). Each pass is wrapped in a generated Metal source file (helpers, a `ShadeParams` struct built from the pass's params, and entry points) and compiled **at runtime** with `MTLDevice.makeLibrary(source:)`. That's what lets Claude-written shaders run without rebuilding the app.
-- `Shade/AI`: the Claude Messages API client, the generate → compile → fix loop, the video-frame sampler and the on-device style analyzer.
-- `Tools/ShaderCheck` + `scripts/check-shaders.sh`: generate the Metal source for every built-in effect, preset and example, then compile each one with the offline Metal compiler on CI. They also regenerate `PROMPT.md`.
+```
+Packages/ShadeCore/          platform-independent core (builds and tests on macOS and Linux)
+  Recipe/                    model, RecipeCodec (all JSON in/out), RecipeValidator, limits
+  Effects/                   built-in effects and preset looks
+  Shaders/                   Metal source generation for a pass
+  Storage/                   RecipeLibrary (.shade files), SessionStore (state.json), LegacyMigration
+  Claude/                    Messages API client, retry policy, settings
+  Generation/                StyleGenerator: ask Claude -> validate -> compile -> send errors back
+  Analysis/                  on-device style analyzer
+  Errors/, Logging/          ShadeError (stable codes), os.Logger wrapper
+  Sources/shadercheck/       CI tool: writes every shader to .metal files and regenerates PROMPT.md
+  Tests/ShadeCoreTests/      unit tests
+Shade/                       the iOS app
+  App/                       ShadeApp, AppModel (camera, capture, notices), LookStore, GenerationController
+  Services/                  camera, Metal shader compiler + cache, Keychain, Photos, media loading, temp files
+  Rendering/                 Metal renderer, video recorder, display shader
+  Views/, Support/           SwiftUI screens and helpers
+```
+
+- **Rendering.** Camera frames become Metal textures without a copy. They run through each pass into half-float ping-pong textures, then go to the screen, a photo or an H.264 video. Each pass is wrapped in generated Metal source and compiled **at runtime** with `MTLDevice.makeLibrary(source:)`. That's what lets Claude-written shaders run without rebuilding the app. One thread-safe pipeline cache is shared by the renderer and by AI validation.
+- **Trust boundary.** Everything from outside the app goes through `RecipeCodec` and `RecipeValidator` before use: files, the clipboard and Claude's replies. That covers size limits (1 MB input, 16 passes, 32 params, 20k characters of code per pass), the format version, effect names and safe parameter identifiers. Custom code only ever runs on the GPU, with read access to the camera image and nothing else. If a pass crashes the GPU (for example, an endless loop), the renderer turns custom passes off and says so.
+- **Storage.** Recipes are one `.shade` file each in `Documents/Recipes`, written atomically. Files that can't be read are listed in the Library with the reason, never silently dropped. The on-screen look, including unsaved edits, is saved to `Application Support/Shade/state.json` shortly after you stop editing, and immediately when the app goes to the background. The API key lives in the Keychain (this device only).
+- **Claude.** The client retries 408/429/5xx/529 and network drops with exponential backoff and jitter, honouring `retry-after`, at one layer only. It never retries 4xx errors. Errors carry stable codes (`ShadeError.Code`) and request IDs for the logs.
+- **Logs.** Open Console.app on a Mac with the iPhone connected and filter on subsystem `com.shadeapp.shade`. The logs never contain the API key, images or shader code.
+
+### Running the tests
+
+```bash
+swift test --package-path Packages/ShadeCore
+```
+
+```bash
+./scripts/check-shaders.sh
+```
+
+The second command generates every shader. On a Mac it also compiles each one with Apple's offline Metal compiler. CI runs both before building the app.
 
 ## Limitations
 
