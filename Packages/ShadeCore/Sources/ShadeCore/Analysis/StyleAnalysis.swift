@@ -1,35 +1,50 @@
-import UIKit
+import Foundation
+
+/// An 8-bit RGBA bitmap, row-major, top row first. The app fills it from a UIImage; tests build it directly.
+public struct RGBAImage: Sendable {
+    public let width: Int
+    public let height: Int
+    public let bytes: [UInt8]
+
+    public init(width: Int, height: Int, bytes: [UInt8]) throws {
+        guard width >= 8, height >= 8, bytes.count == width * height * 4 else {
+            throw ShadeError(.generationInvalidInput, "That image is too small or damaged to analyze.",
+                             detail: "\(width)x\(height), \(bytes.count) bytes")
+        }
+        self.width = width
+        self.height = height
+        self.bytes = bytes
+    }
+}
 
 /// Offline "style match": measures a reference image (palette, tone, saturation, grain, edges, vignetting)
 /// and builds a recipe from built-in effects. No network or API key needed; less clever than Claude, but instant.
-enum StyleAnalyzer {
-    struct Analysis {
-        var palette: [SIMD3<Float>]      // sorted dark -> light
-        var paletteCoverage: Float       // share of pixels close to a palette color (flat-color art scores high)
-        var meanLuma: Float
-        var lumaStd: Float
-        var meanSaturation: Float
-        var warmth: Float                // red-vs-blue balance, -1...1
-        var meanColor: SIMD3<Float>
-        var grain: Float                 // high-frequency noise level
-        var edgeDensity: Float           // share of pixels on strong edges
-        var vignette: Float              // how much darker the corners are than the center
+public enum StyleAnalyzer {
+    /// The app should downscale images to about this size before analysis.
+    public static let analysisSize = 160
+
+    public struct Analysis: Sendable {
+        public var palette: [SIMD3<Float>]      // sorted dark -> light
+        public var paletteCoverage: Float       // share of pixels close to a palette color (flat-color art scores high)
+        public var meanLuma: Float
+        public var lumaStd: Float
+        public var meanSaturation: Float
+        public var warmth: Float                // red-vs-blue balance, -1...1
+        public var meanColor: SIMD3<Float>
+        public var grain: Float                 // high-frequency noise level
+        public var edgeDensity: Float           // share of pixels on strong edges
+        public var vignette: Float              // how much darker the corners are than the center
     }
 
-    static func analyze(_ image: UIImage) -> Analysis? {
-        let size = 160
-        guard let cg = ImageUtils.normalizedCGImage(image, maxDimension: 1024) else { return nil }
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
-                                  space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
-        ctx.interpolationQuality = .medium
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: size, height: size))
-        guard let raw = ctx.data else { return nil }
-        let pixels = UnsafeBufferPointer(start: raw.bindMemory(to: UInt8.self, capacity: size * size * 4), count: size * size * 4)
+    public static func analyze(_ image: RGBAImage) -> Analysis {
+        let width = image.width
+        let height = image.height
+        let pixels = image.bytes
+        let count = width * height
 
-        var colors = [SIMD3<Float>](repeating: .zero, count: size * size)
-        var lumas = [Float](repeating: 0, count: size * size)
-        for i in 0..<(size * size) {
+        var colors = [SIMD3<Float>](repeating: .zero, count: count)
+        var lumas = [Float](repeating: 0, count: count)
+        for i in 0..<count {
             let c = SIMD3<Float>(Float(pixels[i * 4]), Float(pixels[i * 4 + 1]), Float(pixels[i * 4 + 2])) / 255
             colors[i] = c
             lumas[i] = luma(c)
@@ -57,32 +72,33 @@ enum StyleAnalyzer {
         // Grain and edges from the luminance image.
         var residual: Float = 0
         var strongEdges = 0
-        for y in 1..<(size - 1) {
-            for x in 1..<(size - 1) {
-                let i = y * size + x
-                let blur = (lumas[i - 1] + lumas[i + 1] + lumas[i - size] + lumas[i + size]) / 4
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                let i = y * width + x
+                let blur = (lumas[i - 1] + lumas[i + 1] + lumas[i - width] + lumas[i + width]) / 4
                 residual += abs(lumas[i] - blur)
                 let gx = lumas[i + 1] - lumas[i - 1]
-                let gy = lumas[i + size] - lumas[i - size]
-                if sqrt(gx * gx + gy * gy) > 0.25 { strongEdges += 1 }
+                let gy = lumas[i + width] - lumas[i - width]
+                if (gx * gx + gy * gy).squareRoot() > 0.25 { strongEdges += 1 }
             }
         }
-        let inner = Float((size - 2) * (size - 2))
+        let inner = Float((width - 2) * (height - 2))
         let grain = residual / inner
         let edgeDensity = Float(strongEdges) / inner
 
         // Vignette: corners vs center brightness.
-        func regionLuma(_ x0: Int, _ y0: Int, _ w: Int) -> Float {
+        func regionLuma(_ x0: Int, _ y0: Int, _ w: Int, _ h: Int) -> Float {
             var s: Float = 0
-            for y in y0..<(y0 + w) { for x in x0..<(x0 + w) { s += lumas[y * size + x] } }
-            return s / Float(w * w)
+            for y in y0..<(y0 + h) { for x in x0..<(x0 + w) { s += lumas[y * width + x] } }
+            return s / Float(w * h)
         }
-        let w = size / 8
-        let cornerA: Float = regionLuma(0, 0, w) + regionLuma(size - w, 0, w)
-        let cornerB: Float = regionLuma(0, size - w, w) + regionLuma(size - w, size - w, w)
+        let cw = Swift.max(1, width / 8)
+        let ch = Swift.max(1, height / 8)
+        let cornerA: Float = regionLuma(0, 0, cw, ch) + regionLuma(width - cw, 0, cw, ch)
+        let cornerB: Float = regionLuma(0, height - ch, cw, ch) + regionLuma(width - cw, height - ch, cw, ch)
         let corners: Float = (cornerA + cornerB) / 4
-        let center = regionLuma(size / 2 - w, size / 2 - w, w * 2)
-        let vignette = max(0, center - corners)
+        let center = regionLuma(width / 2 - cw, height / 2 - ch, cw * 2, ch * 2)
+        let vignette = Swift.max(0, center - corners)
 
         let (palette, coverage) = kMeans(colors, k: 5)
         return Analysis(palette: palette, paletteCoverage: coverage, meanLuma: meanLuma, lumaStd: lumaStd,
@@ -90,8 +106,11 @@ enum StyleAnalyzer {
                         edgeDensity: edgeDensity, vignette: vignette)
     }
 
-    static func recipe(from image: UIImage, name: String = "Style Match") -> ShaderRecipe? {
-        guard let a = analyze(image) else { return nil }
+    public static func recipe(from image: RGBAImage, name: String = "Style Match") throws -> ShaderRecipe {
+        try RecipeValidator.validate(recipe(from: analyze(image), name: name))
+    }
+
+    public static func recipe(from a: Analysis, name: String = "Style Match") -> ShaderRecipe {
         var passes: [ShaderPass] = []
 
         // Typical phone footage: mean luma ~0.45, std ~0.22, saturation ~0.35.

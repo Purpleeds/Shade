@@ -8,3 +8,7 @@ Payload/
 *.ipa
 .DS_Store
 .swiftpm/
+
+# SwiftPM
+Packages/*/.build/
+Packages/*/Package.resolved

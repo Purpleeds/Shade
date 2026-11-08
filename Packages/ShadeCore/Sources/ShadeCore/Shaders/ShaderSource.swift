@@ -10,14 +10,14 @@ import Foundation
 ///
 /// The app wraps it with a prelude (helpers + a generated `ShadeParams` struct) and an entry point,
 /// then compiles it on the device at runtime with `MTLDevice.makeLibrary(source:)`.
-enum ShaderSource {
-    static let signature = "float4 shade(float2 uv, float2 res, float time, texture2d<float> tex, texture2d<float> orig, sampler smp, constant ShadeParams& P)"
+public enum ShaderSource {
+    public static let signature = "float4 shade(float2 uv, float2 res, float time, texture2d<float> tex, texture2d<float> orig, sampler smp, constant ShadeParams& P)"
 
-    static let vertexFunctionName = "shade_vertex"
-    static let fragmentFunctionName = "shade_fragment"
+    public static let vertexFunctionName = "shade_vertex"
+    public static let fragmentFunctionName = "shade_fragment"
 
     /// Helpers that every pass (and Claude-written code) can use.
-    static let helpers = """
+    public static let helpers = """
     #define SRC(p) tex.sample(smp, (p))
     #define ORIG(p) orig.sample(smp, (p))
     #define PI 3.14159265359
@@ -96,7 +96,7 @@ enum ShaderSource {
     }
     """
 
-    static let header = """
+    public static let header = """
     #include <metal_stdlib>
     using namespace metal;
 
@@ -112,7 +112,7 @@ enum ShaderSource {
     };
     """
 
-    static let entryPoints = """
+    public static let entryPoints = """
     vertex ShadeVOut shade_vertex(uint vid [[vertex_id]]) {
         float2 pos = float2(float((vid << 1) & 2u), float(vid & 2u));
         ShadeVOut o;
@@ -135,7 +135,7 @@ enum ShaderSource {
     }
     """
 
-    static func paramsStruct(_ params: [ShaderParam]) -> String {
+    public static func paramsStruct(_ params: [ShaderParam]) -> String {
         var lines = ["struct ShadeParams {"]
         if params.isEmpty { lines.append("    float _unused;") }
         for p in params {
@@ -146,14 +146,14 @@ enum ShaderSource {
     }
 
     /// The `shade` function body for a pass (built-in or custom), or nil if the pass has nothing to run.
-    static func userCode(for pass: ShaderPass) -> String? {
+    public static func userCode(for pass: ShaderPass) -> String? {
         if let fx = pass.builtInEffect { return fx.code }
         if let code = pass.code, !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return code }
         return nil
     }
 
     /// Complete, compilable MSL for one pass. Errors inside the pass code are reported as `shade:<line>:<col>`.
-    static func source(for pass: ShaderPass) -> String? {
+    public static func source(for pass: ShaderPass) -> String? {
         guard let code = userCode(for: pass) else { return nil }
         return [
             header,
@@ -169,7 +169,7 @@ enum ShaderSource {
     }
 
     /// Parameter values flattened in struct order (matches `ShadeParams` memory layout: all 4-byte floats).
-    static func floats(for pass: ShaderPass) -> [Float] {
+    public static func floats(for pass: ShaderPass) -> [Float] {
         let values = pass.params.flatMap { p in p.kind == .color ? Array(p.value.prefix(3)) : [p.scalar] }
         return values.isEmpty ? [0] : values
     }

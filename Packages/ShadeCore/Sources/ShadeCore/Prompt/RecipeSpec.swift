@@ -2,8 +2,8 @@ import Foundation
 
 /// The instructions that teach Claude how to write Shade recipes.
 /// Used as the system prompt for in-app generation and as the copy-paste prompt for claude.ai.
-enum RecipeSpec {
-    static var effectCatalog: String {
+public enum RecipeSpec {
+    public static var effectCatalog: String {
         BuiltInEffects.all.map { fx in
             let params = fx.params.map { p -> String in
                 switch p.kind {
@@ -17,7 +17,7 @@ enum RecipeSpec {
     }
 
     /// Hand-written so it reads well; Tools/ShaderCheck verifies that it parses and compiles.
-    static let exampleRecipe = #"""
+    public static let exampleRecipe = #"""
     {
       "format": "shade.recipe/1",
       "name": "Neon Comic",
@@ -40,7 +40,7 @@ enum RecipeSpec {
     }
     """#
 
-    static var specification: String {
+    public static var specification: String {
         """
         # Shade recipe format (shade.recipe/1)
 
@@ -131,7 +131,7 @@ enum RecipeSpec {
     }
 
     /// System prompt for the in-app Claude call.
-    static var systemPrompt: String {
+    public static var systemPrompt: String {
         """
         You are the shader designer inside Shade, an iPhone camera app. The user shows you reference images \
         (or frames from a video, in order) and you design a real-time camera shader recipe that reproduces their visual style.
@@ -147,7 +147,7 @@ enum RecipeSpec {
     }
 
     /// Prompt to paste into claude.ai together with an image or video.
-    static var chatPrompt: String {
+    public static var chatPrompt: String {
         """
         I use an iPhone app called Shade that applies real-time GPU shaders to my camera. I'm attaching an image \
         (or video) whose visual style I want to recreate on live camera footage. Study the style (palette, contrast, \
@@ -160,14 +160,14 @@ enum RecipeSpec {
         """
     }
 
-    private static func fmt(_ v: Float) -> String {
+    static func fmt(_ v: Float) -> String {
         if v == v.rounded() && abs(v) < 100_000 { return String(Int(v)) }
         var s = String(format: "%.3f", v)
         while s.hasSuffix("0") { s.removeLast() }
         return s
     }
 
-    private static func hex(_ v: [Float]) -> String {
+    static func hex(_ v: [Float]) -> String {
         let c = v.map { Int(($0 * 255).rounded()) }
         return String(format: "#%02X%02X%02X", c[0], c[1], c[2])
     }

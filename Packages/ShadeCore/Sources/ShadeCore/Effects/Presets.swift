@@ -1,13 +1,13 @@
 import Foundation
 
 /// Looks that ship with the app. Two of them use custom Metal code to show what Claude-written passes look like.
-enum Presets {
+public enum Presets {
     // Fixed ids so the "current recipe" survives relaunches.
     private static func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))! }
 
-    static let original = ShaderRecipe(id: id(1), name: "Original", description: "No effect.", author: "Shade", passes: [])
+    public static let original = ShaderRecipe(id: id(1), name: "Original", description: "No effect.", author: "Shade", passes: [])
 
-    static let neonEdgesCode = """
+    public static let neonEdgesCode = """
     float4 shade(float2 uv, float2 res, float time, texture2d<float> tex, texture2d<float> orig, sampler smp, constant ShadeParams& P) {
         float e = sobel(tex, smp, uv, float2(P.width) / res);
         float hue = fract(uv.y * 0.5 + uv.x * 0.3 + time * P.speed);
@@ -18,7 +18,7 @@ enum Presets {
     }
     """
 
-    static let underwaterCode = """
+    public static let underwaterCode = """
     float4 shade(float2 uv, float2 res, float time, texture2d<float> tex, texture2d<float> orig, sampler smp, constant ShadeParams& P) {
         float2 w = float2(sin(uv.y * 18.0 + time * 1.7), cos(uv.x * 14.0 + time * 1.3)) * 0.004 * P.wobble;
         float3 c = SRC(uv + w).rgb;
@@ -30,7 +30,9 @@ enum Presets {
     }
     """
 
-    static let all: [ShaderRecipe] = [
+    public static func find(_ id: UUID) -> ShaderRecipe? { all.first { $0.id == id } }
+
+    public static let all: [ShaderRecipe] = [
         original,
         ShaderRecipe(id: id(2), name: "Comic Book", description: "Flat colors, ink outlines and print dots.", author: "Shade", passes: [
             .builtIn("colorGrade", ["saturation": [1.4], "contrast": [1.15]]),

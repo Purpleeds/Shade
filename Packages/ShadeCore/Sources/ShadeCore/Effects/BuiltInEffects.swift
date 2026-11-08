@@ -1,26 +1,26 @@
 import Foundation
 
-struct BuiltInEffect: Identifiable, Hashable {
-    let id: String
-    let displayName: String
-    let summary: String
-    let params: [ShaderParam]
+public struct BuiltInEffect: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let displayName: String
+    public let summary: String
+    public let params: [ShaderParam]
     /// MSL defining `float4 shade(...)` with the standard signature.
-    let code: String
+    public let code: String
 }
 
 // swiftlint:disable line_length
-enum BuiltInEffects {
-    static func find(_ name: String) -> BuiltInEffect? {
+public enum BuiltInEffects {
+    public static func find(_ name: String) -> BuiltInEffect? {
         let key = normalizedKey(name)
         return all.first { normalizedKey($0.id) == key } ?? aliases[key].flatMap { alias in all.first { $0.id == alias } }
     }
 
-    static func normalizedKey(_ s: String) -> String {
+    public static func normalizedKey(_ s: String) -> String {
         s.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
-    static let aliases: [String: String] = [
+    public static let aliases: [String: String] = [
         "chromatic": "chromaticAberration",
         "rgbsplit": "chromaticAberration",
         "outline": "edges",
@@ -47,7 +47,7 @@ enum BuiltInEffects {
 
     static let sig = ShaderSource.signature
 
-    static let all: [BuiltInEffect] = [
+    public static let all: [BuiltInEffect] = [
         BuiltInEffect(
             id: "colorGrade", displayName: "Color Grade",
             summary: "Exposure, contrast, saturation, temperature, gamma and a multiply tint.",
