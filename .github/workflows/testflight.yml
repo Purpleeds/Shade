@@ -1,0 +1,73 @@
+name: Upload to TestFlight
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Unique positive build number, greater than previous uploads
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: shade-testflight
+  cancel-in-progress: false
+jobs:
+  upload:
+    runs-on: macos-15
+    environment: testflight
+    timeout-minutes: 60
+    env:
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_PATH: ${{ runner.temp }}/shade-signing/AuthKey.p8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate configuration
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          DISTRIBUTION_P12_BASE64: ${{ secrets.DISTRIBUTION_P12_BASE64 }}
+          DISTRIBUTION_P12_PASSWORD: ${{ secrets.DISTRIBUTION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          for key in APPLE_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY DISTRIBUTION_P12_BASE64 DISTRIBUTION_P12_PASSWORD; do
+            test -n "${!key}" || { echo "Missing configuration: $key"; exit 1; }
+          done
+          mkdir -p "$RUNNER_TEMP/shade-signing"
+          chmod 700 "$RUNNER_TEMP/shade-signing"
+          printf '%s' "$ASC_PRIVATE_KEY" > "$ASC_KEY_PATH"
+          printf '%s' "$DISTRIBUTION_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/shade-signing/distribution.p12"
+          chmod 600 "$ASC_KEY_PATH" "$RUNNER_TEMP/shade-signing/distribution.p12"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          KEYCHAIN="$RUNNER_TEMP/shade-signing/signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 7200 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/shade-signing/distribution.p12" -P "$DISTRIBUTION_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Test core
+        run: swift test --package-path Packages/ShadeCore
+      - name: Install Metal compiler
+        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Validate shaders
+        run: bash scripts/check-shaders.sh
+      - name: Archive, verify and upload
+        run: bash scripts/testflight.sh
+      - name: Save diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testflight-diagnostics
+          path: build/testflight/*.log
+          retention-days: 7
+      - name: Remove signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/shade-signing/signing.keychain-db" || true
+          rm -rf "$RUNNER_TEMP/shade-signing"
