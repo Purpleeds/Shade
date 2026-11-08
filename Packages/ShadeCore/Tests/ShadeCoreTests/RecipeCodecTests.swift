@@ -103,7 +103,7 @@ final class RecipeCodecTests: XCTestCase {
     }
 
     func testEncodingIsDeterministic() throws {
-        let preset = Presets.all[2]
+        let preset = preset("Neon Edges")
         XCTAssertEqual(try RecipeCodec.encode(preset), try RecipeCodec.encode(preset))
     }
 }

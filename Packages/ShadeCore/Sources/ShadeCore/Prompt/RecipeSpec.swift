@@ -4,16 +4,19 @@ import Foundation
 /// Used as the system prompt for in-app generation and as the copy-paste prompt for claude.ai.
 public enum RecipeSpec {
     public static var effectCatalog: String {
-        BuiltInEffects.all.map { fx in
-            let params = fx.params.map { p -> String in
-                switch p.kind {
-                case .float: return "\(p.name) (\(fmt(p.min))...\(fmt(p.max)), default \(fmt(p.scalar)))"
-                case .color: return "\(p.name) (color, default \(hex(p.value)))"
+        EffectCategory.allCases.map { category in
+            let lines = BuiltInEffects.inCategory(category).map { fx -> String in
+                let params = fx.params.map { p -> String in
+                    switch p.kind {
+                    case .float: return "\(p.name) (\(fmt(p.min))...\(fmt(p.max)), default \(fmt(p.scalar)))"
+                    case .color: return "\(p.name) (color, default \(hex(p.value)))"
+                    }
                 }
+                let paramText = params.isEmpty ? "no params" : params.joined(separator: ", ")
+                return "- `\(fx.id)`: \(fx.summary) Params: \(paramText)."
             }
-            let paramText = params.isEmpty ? "no params" : params.joined(separator: ", ")
-            return "- `\(fx.id)`: \(fx.summary) Params: \(paramText)."
-        }.joined(separator: "\n")
+            return "### \(category.displayName)\n\n" + lines.joined(separator: "\n")
+        }.joined(separator: "\n\n")
     }
 
     /// Hand-written so it reads well; Tools/ShaderCheck verifies that it parses and compiles.
@@ -56,7 +59,8 @@ public enum RecipeSpec {
           "name": "Short name",
           "description": "One sentence about the look",
           "author": "Claude",
-          "passes": [ PASS, PASS, ... ]          // 1 to 8 passes, run in order
+          "intensity": 1.0,                      // optional, 0...1: how strongly the whole look is applied
+          "passes": [ PASS, PASS, ... ]          // 1 to 8 passes (max \(RecipeLimits.maxPasses)), run in order
         }
         ```
 
@@ -83,6 +87,8 @@ public enum RecipeSpec {
         - `mix` (optional, 0...1) blends the pass result with its input. Omitted means 1.
         - Built-in params you leave out keep their defaults. Colors are linear 0...1 RGB triples or "#RRGGBB".
         - Every param becomes a live slider / color picker in the app, so expose the values a person would want to tweak.
+        - Focus point: params named exactly `centerX` and `centerY` (0...1, `uv` space) are moved when the user taps the screen. \
+        Use them in custom code for anything with a center (a spotlight, a zoom origin, a focus band) and the look becomes tappable.
 
         ## Built-in effects
 
@@ -101,6 +107,9 @@ public enum RecipeSpec {
 
         - `uv`: 0...1 texture coordinate, origin at the TOP-LEFT of the screen. `res`: frame size in pixels. `time`: seconds since start (use it for animation).
         - `tex`: output of the previous pass (or the camera for the first pass). `orig`: the untouched camera frame.
+        - Feedback: add `"history": true` to a custom pass and `orig` instead holds *this pass's own output from the previous frame* \
+        (on the first frame it holds the current input). Use it for trails, echoes, smears and slow accumulation; keep the blend \
+        below 1.0 so old frames fade out.
         - Sample with `SRC(p)` (= `tex.sample(smp, p)`) and `ORIG(p)` (= `orig.sample(smp, p)`). Sampling clamps at the edges and is bilinear.
         - Params: each param `foo` is `P.foo`. Floats are `float`; colors are `packed_float3`, so write `float3(P.tint)`.
         - Available helpers: `luma(float3)`, `hash21(float2)`, `hash22(float2)`, `noise2(float2)` (value noise 0..1), `fbm(float2)` (5 octaves), \
@@ -120,6 +129,10 @@ public enum RecipeSpec {
         - Match the reference closely: its palette (use `paletteMap`, `duotone` or `colorGrade` tint/temperature), contrast, saturation, \
         line work, texture (grain, halftone, paper, scanlines), blur/glow and any animation implied by a video.
         - The look must work on arbitrary live camera footage, not just the reference image. Do not try to reproduce the reference content.
+        - For nostalgic looks, think about how the image was originally made: film stock (`fade`, `splitTone`, `crossProcess`, `grain`), \
+        wear (`dust`, `filmFlicker`, `lightLeak`), the camera (`vignette`, `instantFrame`, `dateStamp`) or the tape (`vhs`, `scanlines`).
+        - For dreamy looks, combine soft light (`orton`, `bloom`, `haze`), gentle color (`pastel`, `splitTone`) and a little magic \
+        (`sparkles`, `prism`, `trails`).
         - Keep it to 2-6 passes. Name params clearly and give sensible min/max ranges.
 
         ## Example

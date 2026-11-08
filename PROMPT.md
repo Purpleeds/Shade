@@ -25,7 +25,8 @@ Shade is an iPhone app that runs a stack of real-time GPU shader passes over the
   "name": "Short name",
   "description": "One sentence about the look",
   "author": "Claude",
-  "passes": [ PASS, PASS, ... ]          // 1 to 8 passes, run in order
+  "intensity": 1.0,                      // optional, 0...1: how strongly the whole look is applied
+  "passes": [ PASS, PASS, ... ]          // 1 to 8 passes (max 16), run in order
 }
 ```
 
@@ -52,34 +53,72 @@ or custom Metal code:
 - `mix` (optional, 0...1) blends the pass result with its input. Omitted means 1.
 - Built-in params you leave out keep their defaults. Colors are linear 0...1 RGB triples or "#RRGGBB".
 - Every param becomes a live slider / color picker in the app, so expose the values a person would want to tweak.
+- Focus point: params named exactly `centerX` and `centerY` (0...1, `uv` space) are moved when the user taps the screen. Use them in custom code for anything with a center (a spotlight, a zoom origin, a focus band) and the look becomes tappable.
 
 ## Built-in effects
 
+### Color & Tone
+
 - `colorGrade`: Exposure, contrast, saturation, temperature, gamma and a multiply tint. Params: exposure (-2...2, default 0), contrast (0...2, default 1), saturation (0...2, default 1), temperature (-1...1, default 0), gamma (0.3...3, default 1), tint (color, default #FFFFFF).
-- `posterize`: Reduces each color channel to a few flat levels (cel / poster look). Params: levels (2...16, default 5).
-- `edges`: Draws outlines where the image has strong edges (Sobel). Params: threshold (0...1, default 0.25), thickness (0.5...5, default 1.2), color (color, default #000000).
-- `pixelate`: Big square pixels. size is the pixel size in camera pixels. Params: size (2...80, default 10).
-- `chromaticAberration`: Splits red and blue outward from the center like a cheap lens. Params: amount (0...0.1, default 0.02).
-- `vignette`: Darkens (or tints) the corners. Params: strength (0...1, default 0.7), radius (0.2...2, default 1.1), softness (0.05...1.5, default 0.6), color (color, default #000000).
-- `grain`: Animated film grain noise. Params: amount (0...0.5, default 0.08), size (0.5...6, default 1.5).
-- `scanlines`: Rolling scanlines plus an RGB sub-pixel mask. Params: count (100...1500, default 500), strength (0...1, default 0.35), speed (0...5, default 0.5), rgbMask (0...1, default 0.3).
-- `halftone`: Comic-print dots on paper. colorful=1 keeps the dot colors. Params: dotSize (3...40, default 9), angle (0...1.571, default 0.785), colorful (0...1, default 1), paper (color, default #FFFAED).
 - `paletteMap`: Gradient-maps brightness onto 5 colors (c0 = shadows ... c4 = highlights). Params: c0 (color, default #140A29), c1 (color, default #591A66), c2 (color, default #D94059), c3 (color, default #FA994D), c4 (color, default #FFF2BF).
 - `duotone`: Two-color print: shadows -> one color, highlights -> another. Params: shadows (color, default #1A0D59), highlights (color, default #FF8CA6), contrast (0.3...3, default 1.1).
+- `hueShift`: Rotates hues; speed > 0 cycles them over time. Params: shift (0...1, default 0), speed (0...1, default 0).
+- `invert`: Negative image. Params: no params.
+- `splitTone`: Tints shadows and highlights with two different colors (teal/orange, blue/gold...). Params: shadows (color, default #1A5973), highlights (color, default #FFB86B), balance (-1...1, default 0), strength (0...1, default 0.5).
+
+### Film & Nostalgia
+
+- `vignette`: Darkens (or tints) the corners. Params: strength (0...1, default 0.7), radius (0.2...2, default 1.1), softness (0.05...1.5, default 0.6), color (color, default #000000), centerX (0...1, default 0.5), centerY (0...1, default 0.5).
+- `grain`: Animated film grain noise. Params: amount (0...0.5, default 0.08), size (0.5...6, default 1.5).
+- `sepia`: Old-photo brown toning. Params: no params.
+- `fade`: Lifted, tinted blacks and softened whites: the matte look of old prints. Params: fade (0...0.5, default 0.12), ceiling (0.5...1, default 0.93), saturation (0...1.5, default 0.85), tint (color, default #FFEBD9).
+- `lightLeak`: Warm, drifting glows bleeding in from the edges like light hitting old film. Params: intensity (0...1.5, default 0.6), speed (0...2, default 0.3), size (0.2...1.5, default 0.7), color (color, default #FF6B2E), color2 (color, default #FFD166).
+- `dust`: Animated dust specks and vertical scratches of a worn film reel. Params: amount (0...1, default 0.5), scratches (0...1, default 0.4).
+- `filmFlicker`: Projector brightness flicker and the slight frame wobble of old film. Params: flicker (0...0.5, default 0.12), weave (0...0.012, default 0.003), speed (1...30, default 18).
+- `crossProcess`: Slide film developed in the wrong chemicals: punchy yellow-green highlights, cool lifted shadows (lomo look). Params: strength (0...1, default 0.7), contrast (0.5...2, default 1.2).
+- `instantFrame`: Frames the picture in an instant-camera print border with a thicker bottom edge. Params: border (0...0.15, default 0.06), bottom (0...0.3, default 0.17), shadow (0...1, default 0.4), frameColor (color, default #F7F5EB).
+
+### Dreamy & Light
+
 - `bloom`: Soft glow around bright areas. Params: threshold (0...1, default 0.65), intensity (0...4, default 1.2), radius (2...120, default 30), tint (color, default #FFFFFF).
 - `blur`: Soft lens blur (radius in camera pixels). Params: radius (0...80, default 12).
-- `sharpen`: Unsharp-mask style detail boost. Params: amount (0...3, default 0.8).
+- `orton`: The classic dreamy photo trick: a bright, blurred copy screened over the sharp image. Params: glow (0...1, default 0.6), radius (2...60, default 20), brightness (0...1, default 0.4).
+- `pastel`: Soft, airy pastel colors: lifted tones, gentle saturation and a candy tint. Params: softness (0...1, default 0.5), saturation (0...1.5, default 0.7), hueShift (-0.2...0.2, default 0), tint (color, default #FFDBF2).
+- `haze`: Slowly drifting colored mist, thicker toward the top of the frame. Params: amount (0...1, default 0.4), height (0...1, default 0.5), drift (0...1, default 0.3), color (color, default #F2E0F2).
+- `sparkles`: Twinkling star glints on the brightest spots. Params: threshold (0...1, default 0.75), density (0...1, default 0.5), size (1...20, default 8), twinkle (0...5, default 1.5), color (color, default #FFF7E6).
+- `prism`: Splits light into rainbow fringes toward the edges, with an iridescent sheen on highlights. Params: amount (0...0.06, default 0.015), sheen (0...1, default 0.3), speed (0...1, default 0.05).
+- `tiltShift`: Miniature-world look: one sharp horizontal band, everything else melts into blur. Tap the screen to move the band. Params: centerY (0...1, default 0.55), band (0...0.5, default 0.12), blur (0...30, default 12), saturation (0...2, default 1.3).
+- `zoomBlur`: Radial rush of motion out of a clear center. Tap the screen to move the center. Params: strength (0...0.3, default 0.08), focus (0...0.5, default 0.1), centerX (0...1, default 0.5), centerY (0...1, default 0.5).
+- `trails`: Moving things leave glowing, fading trails (uses the previous frame). Drift slowly zooms the trails outward. Params: persistence (0...0.97, default 0.85), lighten (0...1, default 0.6), drift (-0.02...0.02, default 0.004), hueDrift (0...0.05, default 0).
+
+### Retro Tech
+
+- `pixelate`: Big square pixels. size is the pixel size in camera pixels. Params: size (2...80, default 10).
+- `scanlines`: Rolling scanlines plus an RGB sub-pixel mask. Params: count (100...1500, default 500), strength (0...1, default 0.35), speed (0...5, default 0.5), rgbMask (0...1, default 0.3).
+- `dither`: Ordered (Bayer) dithering into a few levels, retro 1-bit style. Pair with paletteMap for Game Boy looks. Params: levels (2...8, default 2), scale (1...10, default 3), colorful (0...1, default 0).
+- `glitch`: Digital block tearing and RGB shifts. Params: amount (0...1, default 0.5), speed (0.1...15, default 3), blockSize (4...200, default 40).
+- `vhs`: Home-video tape: smeared color, wobbling lines, a rolling tracking band and tape noise. Params: chromaBleed (0...0.02, default 0.006), tracking (0...1, default 0.4), noise (0...1, default 0.3), wobble (0...1, default 0.4), saturation (0...1.5, default 0.9).
+- `dateStamp`: The glowing orange date a film camera printed in the corner, like '98 7 14. Params: year (0...99, default 98), month (1...12, default 7), day (1...31, default 14), size (0.5...3, default 1), glow (0...1, default 0.5), color (color, default #FF8C26).
+
+### Artistic
+
+- `posterize`: Reduces each color channel to a few flat levels (cel / poster look). Params: levels (2...16, default 5).
+- `edges`: Draws outlines where the image has strong edges (Sobel). Params: threshold (0...1, default 0.25), thickness (0.5...5, default 1.2), color (color, default #000000).
+- `halftone`: Comic-print dots on paper. colorful=1 keeps the dot colors. Params: dotSize (3...40, default 9), angle (0...1.571, default 0.785), colorful (0...1, default 1), paper (color, default #FFFAED).
 - `kuwahara`: Kuwahara filter: flattens detail into painterly brush strokes. Params: radius (1...6, default 4), spacing (1...4, default 1.5).
 - `thermal`: False-color heat camera look. Params: contrast (0.5...3, default 1.3), offset (-0.5...0.5, default 0).
-- `dither`: Ordered (Bayer) dithering into a few levels, retro 1-bit style. Pair with paletteMap for Game Boy looks. Params: levels (2...8, default 2), scale (1...10, default 3), colorful (0...1, default 0).
+- `sketch`: Pencil lines and cross-hatching on paper. Params: intensity (0.3...4, default 1.5), hatching (0...1, default 0.5), paper (color, default #F5F0E0), ink (color, default #262633).
+
+### Lens & Distortion
+
+- `chromaticAberration`: Splits red and blue outward from the center like a cheap lens. Params: amount (0...0.1, default 0.02).
 - `wave`: Animated wobbly / underwater distortion. Params: amplitude (0...0.06, default 0.01), frequency (1...80, default 20), speed (0...10, default 2).
 - `kaleidoscope`: Mirrors the image into rotating segments. Params: segments (2...16, default 6), speed (0...2, default 0.2), zoom (0.3...3, default 1).
-- `glitch`: Digital block tearing and RGB shifts. Params: amount (0...1, default 0.5), speed (0.1...15, default 3), blockSize (4...200, default 40).
-- `hueShift`: Rotates hues; speed > 0 cycles them over time. Params: shift (0...1, default 0), speed (0...1, default 0).
-- `sketch`: Pencil lines and cross-hatching on paper. Params: intensity (0.3...4, default 1.5), hatching (0...1, default 0.5), paper (color, default #F5F0E0), ink (color, default #262633).
-- `sepia`: Old-photo brown toning. Params: no params.
-- `invert`: Negative image. Params: no params.
 - `mirror`: Mirrors one half of the frame onto the other. vertical=1 mirrors top/bottom. Params: vertical (0...1, default 0).
+
+### Utility
+
+- `sharpen`: Unsharp-mask style detail boost. Params: amount (0...3, default 0.8).
 - `blendOriginal`: Mixes the untouched camera image back in (screen/overlay style via mode: 0 normal, 1 screen, 2 multiply). Params: amount (0...1, default 0.5), mode (0...2, default 0).
 
 ## Custom Metal code
@@ -95,6 +134,7 @@ float4 shade(float2 uv, float2 res, float time, texture2d<float> tex, texture2d<
 
 - `uv`: 0...1 texture coordinate, origin at the TOP-LEFT of the screen. `res`: frame size in pixels. `time`: seconds since start (use it for animation).
 - `tex`: output of the previous pass (or the camera for the first pass). `orig`: the untouched camera frame.
+- Feedback: add `"history": true` to a custom pass and `orig` instead holds *this pass's own output from the previous frame* (on the first frame it holds the current input). Use it for trails, echoes, smears and slow accumulation; keep the blend below 1.0 so old frames fade out.
 - Sample with `SRC(p)` (= `tex.sample(smp, p)`) and `ORIG(p)` (= `orig.sample(smp, p)`). Sampling clamps at the edges and is bilinear.
 - Params: each param `foo` is `P.foo`. Floats are `float`; colors are `packed_float3`, so write `float3(P.tint)`.
 - Available helpers: `luma(float3)`, `hash21(float2)`, `hash22(float2)`, `noise2(float2)` (value noise 0..1), `fbm(float2)` (5 octaves), `rgb2hsv(float3)`, `hsv2rgb(float3)`, `sobel(tex, smp, uv, float2 pixelStep)` (edge strength, ~0..4), `gradient5(t, c0, c1, c2, c3, c4)` (5-stop gradient), constants `PI`, `TAU`.
@@ -109,6 +149,8 @@ float4 shade(float2 uv, float2 res, float time, texture2d<float> tex, texture2d<
 - Prefer built-in effects for standard operations (grading, outlines, posterize, grain, bloom, vignette...). Use custom code for the signature part of the look that no built-in covers (stylised lighting, patterns, procedural textures, distortions, special color mapping).
 - Match the reference closely: its palette (use `paletteMap`, `duotone` or `colorGrade` tint/temperature), contrast, saturation, line work, texture (grain, halftone, paper, scanlines), blur/glow and any animation implied by a video.
 - The look must work on arbitrary live camera footage, not just the reference image. Do not try to reproduce the reference content.
+- For nostalgic looks, think about how the image was originally made: film stock (`fade`, `splitTone`, `crossProcess`, `grain`), wear (`dust`, `filmFlicker`, `lightLeak`), the camera (`vignette`, `instantFrame`, `dateStamp`) or the tape (`vhs`, `scanlines`).
+- For dreamy looks, combine soft light (`orton`, `bloom`, `haze`), gentle color (`pastel`, `splitTone`) and a little magic (`sparkles`, `prism`, `trails`).
 - Keep it to 2-6 passes. Name params clearly and give sensible min/max ranges.
 
 ## Example

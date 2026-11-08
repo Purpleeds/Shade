@@ -1,12 +1,46 @@
 import Foundation
 
+/// Groups effects in the picker and in the recipe spec Claude reads.
+public enum EffectCategory: String, CaseIterable, Sendable {
+    case color, film, dreamy, retro, stylize, distort, utility
+
+    public var displayName: String {
+        switch self {
+        case .color: return "Color & Tone"
+        case .film: return "Film & Nostalgia"
+        case .dreamy: return "Dreamy & Light"
+        case .retro: return "Retro Tech"
+        case .stylize: return "Artistic"
+        case .distort: return "Lens & Distortion"
+        case .utility: return "Utility"
+        }
+    }
+}
+
 public struct BuiltInEffect: Identifiable, Hashable, Sendable {
     public let id: String
     public let displayName: String
+    public let category: EffectCategory
     public let summary: String
     public let params: [ShaderParam]
+    /// When true, the renderer binds this pass's own previous output frame as `orig` (feedback effects).
+    public let usesHistory: Bool
     /// MSL defining `float4 shade(...)` with the standard signature.
     public let code: String
+
+    public init(id: String, displayName: String, category: EffectCategory, summary: String, params: [ShaderParam],
+                usesHistory: Bool = false, code: String) {
+        self.id = id
+        self.displayName = displayName
+        self.category = category
+        self.summary = summary
+        self.params = params
+        self.usesHistory = usesHistory
+        self.code = code
+    }
+
+    /// The parameter names that "tap to set focus" moves.
+    public var hasFocusPoint: Bool { params.contains { $0.name == "centerX" || $0.name == "centerY" } }
 }
 
 // swiftlint:disable line_length
@@ -42,14 +76,57 @@ public enum BuiltInEffects {
         "grade": "colorGrade",
         "colorgrading": "colorGrade",
         "pixel": "pixelate",
-        "mosaic": "pixelate"
+        "mosaic": "pixelate",
+        "faded": "fade",
+        "filmfade": "fade",
+        "matte": "fade",
+        "splittoning": "splitTone",
+        "leak": "lightLeak",
+        "lightleaks": "lightLeak",
+        "scratches": "dust",
+        "dustandscratches": "dust",
+        "flicker": "filmFlicker",
+        "gateweave": "filmFlicker",
+        "vhstape": "vhs",
+        "camcorder": "vhs",
+        "date": "dateStamp",
+        "polaroid": "instantFrame",
+        "instant": "instantFrame",
+        "photoframe": "instantFrame",
+        "crossprocessing": "crossProcess",
+        "xpro": "crossProcess",
+        "lomo": "crossProcess",
+        "softglow": "orton",
+        "dreamglow": "orton",
+        "diffusion": "orton",
+        "pastels": "pastel",
+        "fog": "haze",
+        "mist": "haze",
+        "glitter": "sparkles",
+        "stars": "sparkles",
+        "twinkle": "sparkles",
+        "rainbow": "prism",
+        "dispersion": "prism",
+        "miniature": "tiltShift",
+        "radialblur": "zoomBlur",
+        "feedback": "trails",
+        "echo": "trails",
+        "ghost": "trails",
+        "afterimage": "trails"
     ]
 
     static let sig = ShaderSource.signature
 
-    public static let all: [BuiltInEffect] = [
+    /// Every built-in effect. Order is the order shown inside each category.
+    public static let all: [BuiltInEffect] = classic + nostalgic + dreamy
+
+    public static func inCategory(_ category: EffectCategory) -> [BuiltInEffect] {
+        all.filter { $0.category == category }
+    }
+
+    static let classic: [BuiltInEffect] = [
         BuiltInEffect(
-            id: "colorGrade", displayName: "Color Grade",
+            id: "colorGrade", displayName: "Color Grade", category: .color,
             summary: "Exposure, contrast, saturation, temperature, gamma and a multiply tint.",
             params: [
                 .float("exposure", 0, -2, 2),
@@ -74,7 +151,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "posterize", displayName: "Posterize",
+            id: "posterize", displayName: "Posterize", category: .stylize,
             summary: "Reduces each color channel to a few flat levels (cel / poster look).",
             params: [.float("levels", 5, 2, 16)],
             code: """
@@ -87,7 +164,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "edges", displayName: "Ink Outlines",
+            id: "edges", displayName: "Ink Outlines", category: .stylize,
             summary: "Draws outlines where the image has strong edges (Sobel).",
             params: [
                 .float("threshold", 0.25, 0, 1),
@@ -104,7 +181,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "pixelate", displayName: "Pixelate",
+            id: "pixelate", displayName: "Pixelate", category: .retro,
             summary: "Big square pixels. size is the pixel size in camera pixels.",
             params: [.float("size", 10, 2, 80)],
             code: """
@@ -116,7 +193,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "chromaticAberration", displayName: "Chromatic Aberration",
+            id: "chromaticAberration", displayName: "Chromatic Aberration", category: .distort,
             summary: "Splits red and blue outward from the center like a cheap lens.",
             params: [.float("amount", 0.02, 0, 0.1)],
             code: """
@@ -130,17 +207,19 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "vignette", displayName: "Vignette",
+            id: "vignette", displayName: "Vignette", category: .film,
             summary: "Darkens (or tints) the corners.",
             params: [
                 .float("strength", 0.7, 0, 1),
                 .float("radius", 1.1, 0.2, 2),
                 .float("softness", 0.6, 0.05, 1.5),
-                .color("color", 0, 0, 0)
+                .color("color", 0, 0, 0),
+                .float("centerX", 0.5, 0, 1, label: "Center X"),
+                .float("centerY", 0.5, 0, 1, label: "Center Y")
             ],
             code: """
             \(sig) {
-                float2 d = (uv - 0.5) * float2(res.x / res.y, 1.0);
+                float2 d = (uv - float2(P.centerX, P.centerY)) * float2(res.x / res.y, 1.0);
                 float len = length(d) * 2.0;
                 float v = smoothstep(P.radius - P.softness, P.radius, len) * P.strength;
                 float3 c = SRC(uv).rgb;
@@ -149,7 +228,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "grain", displayName: "Film Grain",
+            id: "grain", displayName: "Film Grain", category: .film,
             summary: "Animated film grain noise.",
             params: [
                 .float("amount", 0.08, 0, 0.5),
@@ -167,7 +246,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "scanlines", displayName: "CRT Scanlines",
+            id: "scanlines", displayName: "CRT Scanlines", category: .retro,
             summary: "Rolling scanlines plus an RGB sub-pixel mask.",
             params: [
                 .float("count", 500, 100, 1500),
@@ -189,7 +268,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "halftone", displayName: "Halftone",
+            id: "halftone", displayName: "Halftone", category: .stylize,
             summary: "Comic-print dots on paper. colorful=1 keeps the dot colors.",
             params: [
                 .float("dotSize", 9, 3, 40),
@@ -216,7 +295,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "paletteMap", displayName: "Palette Map",
+            id: "paletteMap", displayName: "Palette Map", category: .color,
             summary: "Gradient-maps brightness onto 5 colors (c0 = shadows ... c4 = highlights).",
             params: [
                 .color("c0", 0.08, 0.04, 0.16),
@@ -233,7 +312,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "duotone", displayName: "Duotone",
+            id: "duotone", displayName: "Duotone", category: .color,
             summary: "Two-color print: shadows -> one color, highlights -> another.",
             params: [
                 .color("shadows", 0.10, 0.05, 0.35),
@@ -248,7 +327,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "bloom", displayName: "Bloom",
+            id: "bloom", displayName: "Bloom", category: .dreamy,
             summary: "Soft glow around bright areas.",
             params: [
                 .float("threshold", 0.65, 0, 1),
@@ -274,7 +353,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "blur", displayName: "Blur",
+            id: "blur", displayName: "Blur", category: .dreamy,
             summary: "Soft lens blur (radius in camera pixels).",
             params: [.float("radius", 12, 0, 80)],
             code: """
@@ -291,7 +370,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "sharpen", displayName: "Sharpen",
+            id: "sharpen", displayName: "Sharpen", category: .utility,
             summary: "Unsharp-mask style detail boost.",
             params: [.float("amount", 0.8, 0, 3)],
             code: """
@@ -305,7 +384,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "kuwahara", displayName: "Oil Paint",
+            id: "kuwahara", displayName: "Oil Paint", category: .stylize,
             summary: "Kuwahara filter: flattens detail into painterly brush strokes.",
             params: [
                 .float("radius", 4, 1, 6),
@@ -346,7 +425,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "thermal", displayName: "Thermal",
+            id: "thermal", displayName: "Thermal", category: .stylize,
             summary: "False-color heat camera look.",
             params: [
                 .float("contrast", 1.3, 0.5, 3),
@@ -362,7 +441,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "dither", displayName: "Dither",
+            id: "dither", displayName: "Dither", category: .retro,
             summary: "Ordered (Bayer) dithering into a few levels, retro 1-bit style. Pair with paletteMap for Game Boy looks.",
             params: [
                 .float("levels", 2, 2, 8),
@@ -386,7 +465,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "wave", displayName: "Wave Distortion",
+            id: "wave", displayName: "Wave Distortion", category: .distort,
             summary: "Animated wobbly / underwater distortion.",
             params: [
                 .float("amplitude", 0.01, 0, 0.06),
@@ -402,7 +481,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "kaleidoscope", displayName: "Kaleidoscope",
+            id: "kaleidoscope", displayName: "Kaleidoscope", category: .distort,
             summary: "Mirrors the image into rotating segments.",
             params: [
                 .float("segments", 6, 2, 16),
@@ -425,7 +504,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "glitch", displayName: "Glitch",
+            id: "glitch", displayName: "Glitch", category: .retro,
             summary: "Digital block tearing and RGB shifts.",
             params: [
                 .float("amount", 0.5, 0, 1),
@@ -448,7 +527,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "hueShift", displayName: "Hue Shift",
+            id: "hueShift", displayName: "Hue Shift", category: .color,
             summary: "Rotates hues; speed > 0 cycles them over time.",
             params: [
                 .float("shift", 0, 0, 1),
@@ -463,7 +542,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "sketch", displayName: "Pencil Sketch",
+            id: "sketch", displayName: "Pencil Sketch", category: .stylize,
             summary: "Pencil lines and cross-hatching on paper.",
             params: [
                 .float("intensity", 1.5, 0.3, 4),
@@ -484,7 +563,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "sepia", displayName: "Sepia",
+            id: "sepia", displayName: "Sepia", category: .film,
             summary: "Old-photo brown toning.",
             params: [],
             code: """
@@ -498,7 +577,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "invert", displayName: "Invert",
+            id: "invert", displayName: "Invert", category: .color,
             summary: "Negative image.",
             params: [],
             code: """
@@ -508,7 +587,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "mirror", displayName: "Mirror",
+            id: "mirror", displayName: "Mirror", category: .distort,
             summary: "Mirrors one half of the frame onto the other. vertical=1 mirrors top/bottom.",
             params: [.float("vertical", 0, 0, 1)],
             code: """
@@ -521,7 +600,7 @@ public enum BuiltInEffects {
             """),
 
         BuiltInEffect(
-            id: "blendOriginal", displayName: "Blend Original",
+            id: "blendOriginal", displayName: "Blend Original", category: .utility,
             summary: "Mixes the untouched camera image back in (screen/overlay style via mode: 0 normal, 1 screen, 2 multiply).",
             params: [
                 .float("amount", 0.5, 0, 1),

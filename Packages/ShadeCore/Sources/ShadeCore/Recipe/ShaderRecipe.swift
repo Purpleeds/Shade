@@ -17,17 +17,21 @@ public struct ShaderRecipe: Codable, Hashable, Identifiable, Sendable {
     public var description: String?
     public var author: String?
     public var passes: [ShaderPass]
+    /// How strongly the whole look is applied: 1 = fully, 0 = untouched camera. Optional in files (default 1).
+    public var intensity: Float
 
-    public init(id: UUID = UUID(), name: String, description: String? = nil, author: String? = nil, passes: [ShaderPass]) {
+    public init(id: UUID = UUID(), name: String, description: String? = nil, author: String? = nil,
+                passes: [ShaderPass], intensity: Float = 1) {
         self.id = id
         self.name = name
         self.description = description
         self.author = author
         self.passes = passes
+        self.intensity = intensity
     }
 
     enum CodingKeys: String, CodingKey {
-        case format, id, name, description, author, passes
+        case format, id, name, description, author, passes, intensity
     }
 
     public init(from decoder: Decoder) throws {
@@ -40,6 +44,7 @@ public struct ShaderRecipe: Codable, Hashable, Identifiable, Sendable {
         description = try c.decodeIfPresent(String.self, forKey: .description)
         author = try c.decodeIfPresent(String.self, forKey: .author)
         passes = try c.decode([ShaderPass].self, forKey: .passes)
+        intensity = try c.decodeIfPresent(Float.self, forKey: .intensity) ?? 1
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -50,6 +55,7 @@ public struct ShaderRecipe: Codable, Hashable, Identifiable, Sendable {
         try c.encodeIfPresent(description, forKey: .description)
         try c.encodeIfPresent(author, forKey: .author)
         try c.encode(passes, forKey: .passes)
+        if intensity < 1 { try c.encode(intensity, forKey: .intensity) }
     }
 
     /// Thrown inside decoding so `RecipeCodec` can turn it into `.recipeUnsupportedFormat`.
@@ -81,4 +87,26 @@ public struct ShaderRecipe: Codable, Hashable, Identifiable, Sendable {
     }
 
     public var hasCustomCode: Bool { passes.contains { $0.hasCustomCode } }
+
+    /// Whether any enabled pass has a focus point that tapping the screen can move.
+    public var hasFocusPoint: Bool { passes.contains { $0.enabled && $0.hasFocusPoint } }
+
+    /// Moves every pass's `centerX`/`centerY` params to the given texture coordinate (0...1, top-left origin).
+    /// Returns false (and leaves the recipe unchanged) when no pass has a focus point.
+    @discardableResult
+    public mutating func setFocus(x: Float, y: Float) -> Bool {
+        var changed = false
+        for p in passes.indices where passes[p].enabled {
+            for i in passes[p].params.indices {
+                switch passes[p].params[i].name {
+                case "centerX": passes[p].params[i].scalar = x
+                case "centerY": passes[p].params[i].scalar = y
+                default: continue
+                }
+                passes[p].params[i].normalize()
+                changed = true
+            }
+        }
+        return changed
+    }
 }

@@ -44,6 +44,12 @@ func assertShadeErrorAsync<T>(_ code: ShadeError.Code, file: StaticString = #fil
     }
 }
 
+/// Looks up a preset by name (list order changes when presets are added or regrouped).
+func preset(_ name: String) -> ShaderRecipe {
+    guard let p = Presets.all.first(where: { $0.name == name }) else { fatalError("no preset named \(name)") }
+    return p
+}
+
 /// A recipe file exactly as Shade 1.0 wrote it (pretty, sorted keys, with id and format).
 let legacyFileJSON = """
 {

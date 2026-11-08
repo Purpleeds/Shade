@@ -14,22 +14,28 @@ public struct ShaderPass: Codable, Hashable, Identifiable, Sendable {
     public var enabled = true
     /// Blend between the pass input (0) and the pass output (1).
     public var mix: Float = 1
+    /// Custom passes only: when true, `orig` holds this pass's own previous output frame instead of the
+    /// camera image, enabling feedback effects (trails, echoes, smears). Built-ins declare it themselves.
+    public var history = false
 
     public init(name: String? = nil, effect: String? = nil, code: String? = nil, params: [ShaderParam] = [],
-                enabled: Bool = true, mix: Float = 1) {
+                enabled: Bool = true, mix: Float = 1, history: Bool = false) {
         self.name = name
         self.effect = effect
         self.code = code
         self.params = params
         self.enabled = enabled
         self.mix = mix
+        self.history = history
         normalize()
     }
 
     /// Convenience for presets: a built-in effect with some parameter overrides.
     public static func builtIn(_ effect: String, _ overrides: [String: [Float]] = [:], mix: Float = 1) -> ShaderPass {
         var pass = ShaderPass(effect: effect, mix: mix)
+        assert(pass.builtInEffect != nil, "unknown built-in effect \(effect)")
         for (key, value) in overrides {
+            assert(pass.params.contains { $0.name == key }, "\(effect) has no parameter \(key)")
             if let i = pass.params.firstIndex(where: { $0.name == key }) {
                 pass.params[i].value = value
                 pass.params[i].normalize()
@@ -51,6 +57,12 @@ public struct ShaderPass: Codable, Hashable, Identifiable, Sendable {
         return BuiltInEffects.find(effect)
     }
 
+    /// Whether the renderer should feed this pass its own previous frame as `orig`.
+    public var usesHistory: Bool { builtInEffect?.usesHistory ?? history }
+
+    /// Whether "tap to set focus" can move this pass (it has `centerX` and/or `centerY` params).
+    public var hasFocusPoint: Bool { params.contains { $0.name == "centerX" || $0.name == "centerY" } }
+
     public var displayName: String {
         if let name, !name.isEmpty { return name }
         if let fx = builtInEffect { return fx.displayName }
@@ -65,6 +77,7 @@ public struct ShaderPass: Codable, Hashable, Identifiable, Sendable {
         if !mix.isFinite { mix = 1 }
         mix = Swift.min(Swift.max(mix, 0), 1)
         if !hasCustomCode { code = nil }
+        if !hasCustomCode { history = false } // built-ins declare history themselves
 
         if let fx = builtInEffect {
             effect = fx.id
@@ -100,7 +113,7 @@ public struct ShaderPass: Codable, Hashable, Identifiable, Sendable {
     // MARK: Coding
 
     enum CodingKeys: String, CodingKey {
-        case name, effect, code, params, enabled, mix
+        case name, effect, code, params, enabled, mix, history
     }
 
     public init(from decoder: Decoder) throws {
@@ -110,6 +123,7 @@ public struct ShaderPass: Codable, Hashable, Identifiable, Sendable {
         code = try c.decodeIfPresent(String.self, forKey: .code)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         mix = try c.decodeIfPresent(Float.self, forKey: .mix) ?? 1
+        history = try c.decodeIfPresent(Bool.self, forKey: .history) ?? false
         if try !c.contains(.params) || c.decodeNil(forKey: .params) {
             params = []
         } else if let list = try? c.decode([ShaderParam].self, forKey: .params) {
@@ -142,6 +156,7 @@ public struct ShaderPass: Codable, Hashable, Identifiable, Sendable {
             try c.encodeIfPresent(code, forKey: .code)
             try c.encode(params, forKey: .params)
         }
+        if history && hasCustomCode { try c.encode(history, forKey: .history) }
         if !enabled { try c.encode(enabled, forKey: .enabled) }
         if mix < 1 { try c.encode(mix, forKey: .mix) }
     }

@@ -18,14 +18,23 @@ struct ContentView: View {
     @State private var flash = false
     @State private var showErrors = false
     @State private var sourceItem: PhotosPickerItem?
+    @State private var comparing = false
+    @State private var focusRing: CGPoint?
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             if let renderer = model.renderer {
-                MetalView(renderer: renderer)
-                    .ignoresSafeArea()
+                GeometryReader { geo in
+                    MetalView(renderer: renderer)
+                        .contentShape(Rectangle())
+                        .onTapGesture(coordinateSpace: .local) { location in
+                            if model.focus(atViewPoint: location, viewSize: geo.size) { showFocusRing(at: location) }
+                        }
+                        .overlay(alignment: .topLeading) { focusRingView }
+                }
+                .ignoresSafeArea()
             }
 
             if flash {
@@ -46,6 +55,7 @@ struct ContentView: View {
                         .background(.ultraThinMaterial, in: Capsule())
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
+                if !looks.recipe.passes.isEmpty { intensityRow }
                 presetStrip
                 bottomBar
             }
@@ -187,23 +197,93 @@ struct ContentView: View {
         .padding(32)
     }
 
+    // MARK: Quick controls
+
+    private var intensityRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "circle.lefthalf.filled").font(.subheadline)
+            Slider(value: Binding(get: { looks.intensity }, set: { looks.intensity = $0 }), in: 0...1)
+                .tint(.white)
+            Text("\(Int((looks.intensity * 100).rounded()))%")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .frame(width: 40, alignment: .trailing)
+            compareButton
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .foregroundStyle(.white)
+    }
+
+    /// Press and hold to see the untouched camera.
+    private var compareButton: some View {
+        Image(systemName: comparing ? "eye.slash.fill" : "eye")
+            .font(.subheadline.weight(.semibold))
+            .frame(width: 32, height: 32)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !comparing { comparing = true; model.setComparing(true) }
+                }
+                .onEnded { _ in
+                    comparing = false
+                    model.setComparing(false)
+                })
+            .accessibilityLabel("Hold to compare with the original")
+    }
+
+    @ViewBuilder
+    private var focusRingView: some View {
+        if let point = focusRing {
+            Circle()
+                .stroke(Color.yellow, lineWidth: 2)
+                .frame(width: 64, height: 64)
+                .position(point)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func showFocusRing(at point: CGPoint) {
+        withAnimation(.easeOut(duration: 0.1)) { focusRing = point }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            if focusRing == point { withAnimation(.easeIn(duration: 0.3)) { focusRing = nil } }
+        }
+    }
+
     private var presetStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(Array(looks.library.prefix(8)) + Presets.all) { recipe in
-                    Button { looks.apply(recipe) } label: {
-                        Text(recipe.name)
-                            .font(.footnote.weight(.semibold))
-                            .lineLimit(1)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(recipe.id == looks.recipe.id ? AnyShapeStyle(Color.white) : AnyShapeStyle(Material.ultraThinMaterial),
-                                        in: Capsule())
-                            .foregroundStyle(recipe.id == looks.recipe.id ? Color.black : Color.white)
-                    }
+                if !looks.library.isEmpty {
+                    stripHeader("Mine")
+                    ForEach(Array(looks.library.prefix(8))) { presetChip($0) }
+                }
+                ForEach(Presets.sections, id: \.category) { section in
+                    if section.category != .basics { stripHeader(section.category.displayName) }
+                    ForEach(section.recipes) { presetChip($0) }
                 }
             }
             .padding(.horizontal, 2)
+        }
+    }
+
+    private func stripHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption2.weight(.heavy))
+            .foregroundStyle(.white.opacity(0.7))
+            .padding(.leading, 6)
+    }
+
+    private func presetChip(_ recipe: ShaderRecipe) -> some View {
+        Button { looks.apply(recipe) } label: {
+            Text(recipe.name)
+                .font(.footnote.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(recipe.id == looks.recipe.id ? AnyShapeStyle(Color.white) : AnyShapeStyle(Material.ultraThinMaterial),
+                            in: Capsule())
+                .foregroundStyle(recipe.id == looks.recipe.id ? Color.black : Color.white)
         }
     }
 

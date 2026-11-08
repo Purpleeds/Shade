@@ -12,8 +12,8 @@ final class RecipeLibraryTests: XCTestCase {
     func testSavedRecipesSurviveAReload() throws {
         let library = makeLibrary()
         library.reload()
-        let saved = try library.add(Presets.all[2])
-        XCTAssertNotEqual(saved.id, Presets.all[2].id, "adding gives a new identity")
+        let saved = try library.add(preset("Neon Edges"))
+        XCTAssertNotEqual(saved.id, preset("Neon Edges").id, "adding gives a new identity")
 
         let fresh = makeLibrary()
         let report = fresh.reload()
@@ -25,7 +25,7 @@ final class RecipeLibraryTests: XCTestCase {
     func testSavingTwiceOverwritesTheSameFile() throws {
         let library = makeLibrary()
         library.reload()
-        var r = try library.add(Presets.all[3])
+        var r = try library.add(preset("Retro CRT"))
         r.name = "Renamed"
         try library.save(r)
         let files = try FileManager.default.contentsOfDirectory(atPath: recipesDir.path)
@@ -37,8 +37,8 @@ final class RecipeLibraryTests: XCTestCase {
     func testSavingAPresetStoresACopy() throws {
         let library = makeLibrary()
         library.reload()
-        let stored = try library.save(Presets.all[1])
-        XCTAssertNotEqual(stored.id, Presets.all[1].id)
+        let stored = try library.save(preset("Comic Book"))
+        XCTAssertNotEqual(stored.id, preset("Comic Book").id)
     }
 
     func testDuplicateIDsFromCopiedFilesGetStableNewIDs() throws {
@@ -86,7 +86,7 @@ final class RecipeLibraryTests: XCTestCase {
     func testDelete() throws {
         let library = makeLibrary()
         library.reload()
-        let saved = try library.add(Presets.all[4])
+        let saved = try library.add(preset("Film Noir"))
         try library.delete(id: saved.id)
         XCTAssertTrue(library.recipes.isEmpty)
         XCTAssertEqual(makeLibrary().reload().loadedCount, 0)
@@ -106,7 +106,7 @@ final class RecipeLibraryTests: XCTestCase {
         let library = makeLibrary()
         let report = library.reload()
         XCTAssertEqual(report.problems.first?.error.code, .storageWriteFailed)
-        XCTAssertShadeError(.storageWriteFailed) { try library.add(Presets.all[2]) }
+        XCTAssertShadeError(.storageWriteFailed) { try library.add(preset("Neon Edges")) }
     }
 
     func testFileNamesAreSafe() {
@@ -121,7 +121,7 @@ final class SessionStoreTests: XCTestCase {
         let tmp = try TempDir()
         let store = SessionStore(fileURL: tmp.url.appendingPathComponent("Shade/state.json"))
         XCTAssertNil(store.load().activeLook, "missing file means a fresh session")
-        var recipe = Presets.all[5]
+        var recipe = preset("Pocket Console")
         recipe.passes[0].params[0].value = [9]
         let look = ActiveLook(recipe: recipe, origin: .preset(recipe.id), isModified: true)
         try store.save(SessionState(activeLook: look))
@@ -171,8 +171,8 @@ final class LegacyMigrationTests: XCTestCase {
     func legacyBlob(_ recipe: ShaderRecipe) throws -> Data { try RecipeCodec.encode(recipe, pretty: false) }
 
     func testUnmodifiedPresetMigratesAsPreset() throws {
-        defaults.set(try legacyBlob(Presets.all[1]), forKey: LegacyMigration.currentRecipeKey)
-        XCTAssertEqual(LegacyMigration.migrateActiveLook(defaults: defaults, sessionStore: store, library: library), .migrated(.preset(Presets.all[1].id)))
+        defaults.set(try legacyBlob(preset("Comic Book")), forKey: LegacyMigration.currentRecipeKey)
+        XCTAssertEqual(LegacyMigration.migrateActiveLook(defaults: defaults, sessionStore: store, library: library), .migrated(.preset(preset("Comic Book").id)))
         let look = try XCTUnwrap(store.load().activeLook)
         XCTAssertFalse(look.isModified)
         XCTAssertNil(defaults.data(forKey: LegacyMigration.currentRecipeKey), "legacy key removed after success")
@@ -180,7 +180,7 @@ final class LegacyMigrationTests: XCTestCase {
     }
 
     func testEditedPresetKeepsItsEdits() throws {
-        var edited = Presets.all[1]
+        var edited = preset("Comic Book")
         edited.passes[0].params[0].value = [2]
         defaults.set(try legacyBlob(edited), forKey: LegacyMigration.currentRecipeKey)
         LegacyMigration.migrateActiveLook(defaults: defaults, sessionStore: store, library: library)
@@ -190,12 +190,12 @@ final class LegacyMigrationTests: XCTestCase {
     }
 
     func testLibraryAndUnsavedOrigins() throws {
-        let saved = try library.add(Presets.all[3])
+        let saved = try library.add(preset("Retro CRT"))
         defaults.set(try legacyBlob(saved), forKey: LegacyMigration.currentRecipeKey)
         XCTAssertEqual(LegacyMigration.migrateActiveLook(defaults: defaults, sessionStore: store, library: library), .migrated(.library(saved.id)))
 
         try FileManager.default.removeItem(at: store.fileURL)
-        defaults.set(try legacyBlob(Presets.all[3].duplicated()), forKey: LegacyMigration.currentRecipeKey)
+        defaults.set(try legacyBlob(preset("Retro CRT").duplicated()), forKey: LegacyMigration.currentRecipeKey)
         XCTAssertEqual(LegacyMigration.migrateActiveLook(defaults: defaults, sessionStore: store, library: library), .migrated(.unsaved))
     }
 
@@ -207,16 +207,16 @@ final class LegacyMigrationTests: XCTestCase {
     }
 
     func testLeftoverKeyAfterACompletedMigrationIsCleanedUp() throws {
-        try store.save(SessionState(activeLook: ActiveLook(recipe: Presets.all[2], origin: .preset(Presets.all[2].id), isModified: false)))
-        defaults.set(try legacyBlob(Presets.all[4]), forKey: LegacyMigration.currentRecipeKey)
+        try store.save(SessionState(activeLook: ActiveLook(recipe: preset("Neon Edges"), origin: .preset(preset("Neon Edges").id), isModified: false)))
+        defaults.set(try legacyBlob(preset("Film Noir")), forKey: LegacyMigration.currentRecipeKey)
         XCTAssertEqual(LegacyMigration.migrateActiveLook(defaults: defaults, sessionStore: store, library: library), .alreadyMigrated)
-        XCTAssertEqual(store.load().activeLook?.recipe.id, Presets.all[2].id, "newer state wins")
+        XCTAssertEqual(store.load().activeLook?.recipe.id, preset("Neon Edges").id, "newer state wins")
     }
 
     func testFailedWriteKeepsTheLegacyDataForNextLaunch() throws {
         let blocked = SessionStore(fileURL: tmp.url.appendingPathComponent("blocker/state.json"))
         _ = try tmp.write("file in the way", to: "blocker")
-        defaults.set(try legacyBlob(Presets.all[2]), forKey: LegacyMigration.currentRecipeKey)
+        defaults.set(try legacyBlob(preset("Neon Edges")), forKey: LegacyMigration.currentRecipeKey)
         guard case .failed(let error) = LegacyMigration.migrateActiveLook(defaults: defaults, sessionStore: blocked, library: library) else {
             return XCTFail("expected failure")
         }

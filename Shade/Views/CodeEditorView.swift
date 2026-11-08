@@ -25,6 +25,18 @@ struct CodeEditorView: View {
                 .pickerStyle(.segmented)
                 .padding()
 
+                if !isBuiltIn {
+                    Toggle(isOn: $pass.history) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Feedback (use previous frame)").font(.subheadline)
+                            Text("When on, orig / ORIG(p) is this pass's own output from the last frame.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                }
+
                 switch tab {
                 case 0: editor($code)
                 case 1:
@@ -131,7 +143,9 @@ struct CodeEditorView: View {
     res    frame size in pixels
     time   seconds (for animation)
     tex    previous pass output
-    orig   untouched camera frame
+    orig   untouched camera frame, or with
+           Feedback on: this pass's previous
+           output frame (trails, echoes)
 
     SRC(p)  sample tex at p
     ORIG(p) sample orig at p
@@ -141,6 +155,9 @@ struct CodeEditorView: View {
     luma(rgb) hash21(p) hash22(p) noise2(p) fbm(p)
     rgb2hsv(c) hsv2rgb(c) gradient5(t,c0..c4)
     sobel(tex, smp, uv, float2 step)  PI  TAU
+
+    Name params centerX / centerY and tapping
+    the preview moves them (focus point).
 
     Params tab: a JSON array, e.g.
     [{"name":"amount","type":"float","value":0.5,"min":0,"max":1},

@@ -45,6 +45,7 @@ public enum RecipeValidator {
         r.description = r.description.map { clean($0, limit: RecipeLimits.maxDescriptionCharacters) }.flatMap { $0.isEmpty ? nil : $0 }
         r.author = r.author.map { clean($0, limit: RecipeLimits.maxNameCharacters) }.flatMap { $0.isEmpty ? nil : $0 }
         r.passes = r.passes.map { var p = $0; p.normalize(); return p }
+        r.intensity = r.intensity.isFinite ? Swift.min(Swift.max(r.intensity, 0), 1) : 1
         let found = problems(in: r)
         guard found.isEmpty else {
             throw ShadeError(.recipeInvalid, "The recipe has problems:\n" + found.joined(separator: "\n"))

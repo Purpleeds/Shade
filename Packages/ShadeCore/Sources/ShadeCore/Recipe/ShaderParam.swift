@@ -67,8 +67,9 @@ public struct ShaderParam: Codable, Hashable, Sendable {
             if value.count == 1 { value = [value[0], value[0], value[0]] }
             while value.count < 3 { value.append(0) }
             if value.count > 3 { value = Array(value.prefix(3)) }
-            // Accept 0...255 colors as well.
-            if value.contains(where: { $0 > 1.0001 }) { value = value.map { $0 / 255 } }
+            // Accept 0...255 colors as well. Only clearly-0-255 values count (> 2), so a channel that is
+            // slightly over 1 (e.g. after a remix, or 1.05 from Claude) is clamped instead of turned near-black.
+            if value.contains(where: { $0 > 2 }) { value = value.map { $0 / 255 } }
             value = value.map { Swift.min(Swift.max($0, 0), 1) }
         }
     }

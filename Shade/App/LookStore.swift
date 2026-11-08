@@ -86,6 +86,66 @@ final class LookStore: ObservableObject {
         edit(recipe)
     }
 
+    // MARK: Quick customisation
+
+    /// How strongly the whole look is applied (0 = camera, 1 = full look).
+    var intensity: Float {
+        get { look.recipe.intensity }
+        set {
+            var recipe = look.recipe
+            recipe.intensity = min(max(newValue, 0), 1)
+            edit(recipe)
+        }
+    }
+
+    /// Moves the focus point of every pass that has one. Returns false if the look has none.
+    @discardableResult
+    func setFocus(x: Float, y: Float) -> Bool {
+        var recipe = look.recipe
+        guard recipe.setFocus(x: x, y: y) else { return false }
+        edit(recipe)
+        return true
+    }
+
+    func addPass(_ pass: ShaderPass) {
+        guard look.recipe.passes.count < RecipeLimits.maxPasses else { return }
+        var recipe = look.recipe
+        recipe.passes.append(pass)
+        edit(recipe)
+    }
+
+    func randomizePass(_ id: ShaderPass.ID) {
+        updatePass(id) { pass in
+            var rng = SystemRandomNumberGenerator()
+            return pass.randomized(using: &rng)
+        }
+    }
+
+    func resetPass(_ id: ShaderPass.ID) {
+        updatePass(id) { $0.resetToDefaults() ?? $0 }
+    }
+
+    func duplicatePass(_ id: ShaderPass.ID) {
+        guard look.recipe.passes.count < RecipeLimits.maxPasses,
+              let i = look.recipe.passes.firstIndex(where: { $0.id == id }) else { return }
+        var recipe = look.recipe
+        recipe.passes.insert(recipe.passes[i].duplicated(), at: i + 1)
+        edit(recipe)
+    }
+
+    /// Nudges every slider of the look a little in a random direction.
+    func remix(amount: Float = 0.15) {
+        var rng = SystemRandomNumberGenerator()
+        edit(look.recipe.remixed(amount: amount, using: &rng))
+    }
+
+    private func updatePass(_ id: ShaderPass.ID, _ change: (ShaderPass) -> ShaderPass) {
+        guard let i = look.recipe.passes.firstIndex(where: { $0.id == id }) else { return }
+        var recipe = look.recipe
+        recipe.passes[i] = change(recipe.passes[i])
+        edit(recipe)
+    }
+
     // MARK: Library
 
     /// Saves the active look: overwrites its library file, or stores presets/unsaved looks as a new entry.

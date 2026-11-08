@@ -10,6 +10,16 @@ You can make new looks three ways:
 | **On-device** | Measures a reference image's palette, contrast, saturation, grain and vignette, then builds a look from the built-in effects. Instant and offline. | Nothing |
 | **Claude chat** | Tap **Copy prompt**, paste it into [claude.ai](https://claude.ai) with your image or video, copy Claude's reply, then tap **Paste Claude's reply**. The same prompt is in [`PROMPT.md`](PROMPT.md). | A Claude account (free works) |
 
+There are 30 ready-made looks in five groups: **Nostalgic** (Super 8, Camcorder '98, Faded Memory, Instant Summer, Silent Reel, Lomo, Film Noir), **Dreamy** (Golden Hour, Dreamscape, Cotton Candy, Ethereal Trails, Moonlight, Prism Dream, Daydream, Miniature World and more), **Retro Tech**, **Artistic** and **Fun**.
+
+Customising a look:
+
+- **Intensity:** the slider above the presets fades the whole look in or out.
+- **Compare:** press and hold the eye button to see the camera without the look.
+- **Tap to focus:** looks with a focus point (tilt-shift, zoom blur, vignettes) follow your tap on the preview.
+- **Adjust:** every effect has sliders and color pickers. Each control has its own reset button. Effects can be randomized, reset, duplicated, reordered, mixed and turned off. **Remix** nudges the whole look in a new direction. **Add effect** opens a searchable, categorized effect browser.
+- **Custom code:** write your own Metal pass, or let Claude write one. Turn on **Feedback** to give a pass its own previous frame, for trails and echoes.
+
 You can also capture photos and (silent) videos to your library, preview looks on a still photo, tweak every parameter with sliders and color pickers, reorder or add passes, edit the Metal code in the app, and share looks as `.shade` files.
 
 ## Install it on your iPhone (sideloading)
@@ -80,7 +90,17 @@ A look is a JSON *recipe*: an ordered list of passes. Each pass is either one of
 }
 ```
 
-Built-in effects: color grade, posterize, ink outlines, pixelate, chromatic aberration, vignette, film grain, CRT scanlines, halftone, palette map, duotone, bloom, blur, sharpen, oil paint (Kuwahara), thermal, dither, wave, kaleidoscope, glitch, hue shift, pencil sketch, sepia, invert, mirror and blend-original. The full specification, with every parameter, is in [`PROMPT.md`](PROMPT.md) (generated from `Shade/Recipe/RecipeSpec.swift`). See [`Examples/watercolor.shade`](Examples/watercolor.shade) for a complete recipe.
+Built-in effects (43), by category:
+
+- **Film & Nostalgia:** faded film, light leaks, dust & scratches, flicker & gate weave, cross process, instant photo frame, vignette, film grain, sepia
+- **Dreamy & Light:** Orton glow, pastel, dreamy haze, sparkles, prism rainbow, tilt-shift, zoom blur, dream trails (motion trails), bloom, blur
+- **Retro Tech:** VHS tape, date stamp, CRT scanlines, pixelate, dither, glitch
+- **Color & Tone:** color grade, split tone, palette map, duotone, hue shift, invert
+- **Artistic:** posterize, ink outlines, halftone, oil paint, pencil sketch, thermal
+- **Lens & Distortion:** chromatic aberration, wave, kaleidoscope, mirror
+- **Utility:** sharpen, blend original
+
+The full specification, with every parameter, is in [`PROMPT.md`](PROMPT.md) (generated from `Shade/Recipe/RecipeSpec.swift`). See [`Examples/watercolor.shade`](Examples/watercolor.shade) for a complete recipe.
 
 Recipes are stored as `.shade` files in **Files → On My iPhone → Shade → Recipes**. You can AirDrop them, and opening a `.shade` file imports it.
 

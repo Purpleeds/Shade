@@ -27,6 +27,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         let floats: [Float]
         let mix: Float
         let isCustom: Bool
+        /// Set for feedback passes: the key of the texture holding this pass's previous output.
+        let historyKey: UUID?
     }
 
     let device: MTLDevice
@@ -44,6 +46,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var recipe: ShaderRecipe?
     private var prepared: [PreparedPass] = []
     private var targets: [MTLTexture] = []
+    /// Previous-frame outputs of feedback passes, keyed by pass id.
+    private var history: [UUID: MTLTexture] = [:]
+    private var primedHistory: Set<UUID> = []
+    /// When true, frames are shown without any passes (hold-to-compare).
+    var bypass = false
+    /// The mapping used for the last frame on screen, for converting taps into image coordinates.
+    private(set) var lastDisplayUniforms = Renderer.identityUniforms
     private let startTime = CACurrentMediaTime()
     private var generation = 0
 
@@ -139,23 +148,55 @@ final class Renderer: NSObject, MTKViewDelegate {
                 errors.append("Pass \(i + 1) (\(pass.displayName)): \(problem)")
                 continue
             }
-            guard let source = ShaderSource.source(for: pass) else { continue }
-            switch compiler.cached(source) {
-            case .success(let pipeline):
-                passes.append(PreparedPass(pipeline: pipeline, floats: ShaderSource.floats(for: pass), mix: pass.mix, isCustom: pass.isCustom))
-            case .failure(let error):
-                errors.append("Pass \(i + 1) (\(pass.displayName)):\n\(error.message)")
-            case nil:
-                compiler.compile(source) { [weak self] _ in
-                    DispatchQueue.main.async { self?.rebuild() }
-                }
+            switch prepare(pass) {
+            case .success(let prepared?): passes.append(prepared)
+            case .success(nil): break
+            case .failure(let error): errors.append("Pass \(i + 1) (\(pass.displayName)):\n\(error.message)")
             }
         }
+        // Look-wide intensity: blend the finished look back toward the untouched camera image.
+        if recipe.intensity < 0.999, !passes.isEmpty {
+            var blend = ShaderPass.builtIn("blendOriginal", ["amount": [1 - recipe.intensity], "mode": [0]])
+            blend.id = Renderer.intensityPassID
+            if case .success(let prepared?) = prepare(blend) { passes.append(prepared) }
+        }
+        let liveKeys = Set(passes.compactMap(\.historyKey))
+        history = history.filter { liveKeys.contains($0.key) }
+        primedHistory.formIntersection(liveKeys)
         prepared = passes
         if errors != lastErrors {
             lastErrors = errors
             onCompileErrors?(errors)
         }
+    }
+
+    private static let intensityPassID = UUID()
+
+    /// A ready pipeline, nil while it compiles (a rebuild follows), or the compile error.
+    private func prepare(_ pass: ShaderPass) -> Result<PreparedPass?, ShadeError> {
+        guard let source = ShaderSource.source(for: pass) else { return .success(nil) }
+        switch compiler.cached(source) {
+        case .success(let pipeline):
+            return .success(PreparedPass(pipeline: pipeline, floats: ShaderSource.floats(for: pass), mix: pass.mix,
+                                         isCustom: pass.isCustom, historyKey: pass.usesHistory ? pass.id : nil))
+        case .failure(let error):
+            return .failure(error)
+        case nil:
+            compiler.compile(source) { [weak self] _ in
+                DispatchQueue.main.async { self?.rebuild() }
+            }
+            return .success(nil)
+        }
+    }
+
+    /// Converts a point in the preview (view coordinates) into image coordinates (0...1, top-left origin).
+    func imageCoordinate(forViewPoint point: CGPoint, viewSize: CGSize) -> CGPoint? {
+        guard viewSize.width > 0, viewSize.height > 0 else { return nil }
+        let u = lastDisplayUniforms
+        let x = Float(point.x / viewSize.width) * u.scale.x + u.offset.x
+        let y = Float(point.y / viewSize.height) * u.scale.y + u.offset.y
+        guard (0...1).contains(x), (0...1).contains(y) else { return nil }
+        return CGPoint(x: CGFloat(x), y: CGFloat(y))
     }
 
     // MARK: Capture
@@ -206,6 +247,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         desc.storageMode = .private
         targets = (0..<2).compactMap { _ in device.makeTexture(descriptor: desc) }
         if targets.count != 2 { log.error("could not allocate \(width)x\(height) render targets") }
+        history.removeAll()
+        primedHistory.removeAll()
+    }
+
+    private func historyTexture(for key: UUID, like target: MTLTexture) -> MTLTexture? {
+        if let existing = history[key] { return existing }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: target.pixelFormat, width: target.width, height: target.height, mipmapped: false)
+        desc.usage = [.renderTarget, .shaderRead]
+        desc.storageMode = .private
+        let texture = device.makeTexture(descriptor: desc)
+        history[key] = texture
+        return texture
     }
 
     func draw(in view: MTKView) {
@@ -231,7 +284,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                                     time: Float(CACurrentMediaTime() - startTime), mixAmount: 1)
         var ranCustomCode = false
 
-        if targets.count == 2 {
+        if targets.count == 2, !bypass {
             for (i, pass) in prepared.enumerated() {
                 let target = targets[i % 2]
                 let rpd = MTLRenderPassDescriptor()
@@ -241,7 +294,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                 guard let enc = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else { break }
                 enc.setRenderPipelineState(pass.pipeline)
                 enc.setFragmentTexture(current, index: 0)
-                enc.setFragmentTexture(input, index: 1)
+                if let key = pass.historyKey {
+                    // Feedback pass: `orig` is this pass's previous output (the current input on the first frame).
+                    enc.setFragmentTexture(primedHistory.contains(key) ? history[key] : current, index: 1)
+                } else {
+                    enc.setFragmentTexture(input, index: 1)
+                }
                 system.mixAmount = pass.mix
                 enc.setFragmentBytes(&system, length: MemoryLayout<SystemUniforms>.stride, index: 0)
                 pass.floats.withUnsafeBytes { bytes in
@@ -249,13 +307,19 @@ final class Renderer: NSObject, MTKViewDelegate {
                 }
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
                 enc.endEncoding()
+                if let key = pass.historyKey, let store = historyTexture(for: key, like: target),
+                   let blit = commandBuffer.makeBlitCommandEncoder() {
+                    blit.copy(from: target, to: store)
+                    blit.endEncoding()
+                    primedHistory.insert(key)
+                }
                 current = target
                 ranCustomCode = ranCustomCode || pass.isCustom
             }
         }
 
-        drawProcessed(current, into: screenPass, commandBuffer: commandBuffer,
-                      uniforms: Renderer.aspectFill(texture: CGSize(width: input.width, height: input.height), target: view.drawableSize))
+        lastDisplayUniforms = Renderer.aspectFill(texture: CGSize(width: input.width, height: input.height), target: view.drawableSize)
+        drawProcessed(current, into: screenPass, commandBuffer: commandBuffer, uniforms: lastDisplayUniforms)
 
         if let completion = pendingPhoto {
             pendingPhoto = nil

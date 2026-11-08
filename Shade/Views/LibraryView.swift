@@ -38,8 +38,10 @@ struct LibraryView: View {
                         Text("These files are still in Files → On My iPhone → Shade. Fix or delete them there.")
                     }
                 }
-                Section("Built in") {
-                    ForEach(Presets.all) { row($0) }
+                ForEach(Presets.sections, id: \.category) { section in
+                    Section(section.category.displayName) {
+                        ForEach(section.recipes) { row($0) }
+                    }
                 }
                 Section {
                     Text("Recipes are .shade files in Files → On My iPhone → Shade → Recipes. You can AirDrop or share them, and open .shade files from anywhere to import them.")

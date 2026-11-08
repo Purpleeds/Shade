@@ -143,6 +143,21 @@ final class AppModel: ObservableObject {
         stillImage = nil
     }
 
+    // MARK: Compare & focus
+
+    /// Hold-to-compare: shows the untouched camera while true.
+    func setComparing(_ comparing: Bool) {
+        renderer?.bypass = comparing
+    }
+
+    /// Handles a tap on the preview. Returns the image coordinate used if the look has a focus point.
+    @discardableResult
+    func focus(atViewPoint point: CGPoint, viewSize: CGSize) -> Bool {
+        guard looks.recipe.hasFocusPoint,
+              let p = renderer?.imageCoordinate(forViewPoint: point, viewSize: viewSize) else { return false }
+        return looks.setFocus(x: Float(p.x), y: Float(p.y))
+    }
+
     // MARK: Opening files
 
     func open(_ url: URL) {
