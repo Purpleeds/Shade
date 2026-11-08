@@ -58,8 +58,12 @@ Apple references:
 
 Prepared locally from commit `21e753e`. The previous `/workspace/Shade/TESTFLIGHT.md` and workflow were not present on this Mac or the inspected default branch. The files here are reconstructed preparation, not recovered copies. Apple account inspection, identifier registration, app record creation, signed archive and App Store export are complete. Upload and processing are tracked below.
 
-Local validation: 57 core tests passed; 30 generated Metal sources compiled; Release iPhone build succeeded with Xcode 27.2 after installing Metal Toolchain 27B47. The workflow YAML and embedded shell steps parse. Signed export and upload have not been exercised.
+Local validation: 57 core tests passed; 30 generated Metal sources compiled; Release iPhone build succeeded with Xcode 27.2 after installing Metal Toolchain 27B47. The workflow YAML and embedded shell steps parse. Signed archive, App Store export and upload were exercised successfully through Xcode with the existing account. The hosted workflow itself has not been run.
 
-Verified signed export: `build/testflight/export/Shade.ipa`, version 1.1.0 (2), team `YL2GBDKC79`, profile `iOS Team Store Provisioning Profile: com.shadeapp.shade` expiring June 26, 2027. The code signature, distribution-only profile, entitlements and bundled privacy manifest passed local checks. Upload was initiated; consult the current App Store Connect build status before retrying.
+Verified signed export: `build/testflight/export/Shade.ipa`, version 1.1.0 (2), team `YL2GBDKC79`, profile `iOS Team Store Provisioning Profile: com.shadeapp.shade` expiring June 26, 2027. The code signature, distribution-only profile, entitlements and bundled privacy manifest passed local checks. Upload succeeded on November 8, 2026. Apple processing completed; the encryption questionnaire was answered based on the app using Apple-provided HTTPS and Keychain functionality only. Build 1.1.0 (2) is assigned to the manual Shade Internal group and shows **Testing**, with one invited internal tester. Do not upload build 2 again. The GitHub-hosted TestFlight workflow still needs its documented environment configuration and has not been run.
 
 App record: https://appstoreconnect.apple.com/apps/6832135662/distribution
+
+Verified TestFlight page: https://appstoreconnect.apple.com/teams/851224d3-3b66-4a70-a9c2-fff10e4afe44/apps/6832135662/testflight/groups/37ef0b33-8a4c-449f-b95f-6d666d2c8166/builds
+
+Preparation review: https://github.com/Purpleeds/Shade/pull/1
