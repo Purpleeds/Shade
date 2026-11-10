@@ -20,6 +20,18 @@ Customising a look:
 - **Adjust:** every effect has sliders and color pickers. Each control has its own reset button. Effects can be randomized, reset, duplicated, reordered, mixed and turned off. **Remix** nudges the whole look in a new direction. **Add effect** opens a searchable, categorized effect browser.
 - **Custom code:** write your own Metal pass, or let Claude write one. Turn on **Feedback** to give a pass its own previous frame, for trails and echoes.
 
+**Resolution and smoothness.** Tap the megapixel chip in the top bar (or go to Settings → Camera & performance) to choose how many megapixels Shade processes:
+
+| Setting | Size | Good for |
+| --- | --- | --- |
+| 0.5 MP | 540 × 960 | Smoothest on any iPhone |
+| 0.9 MP | 720 × 1280 | Smooth on any iPhone |
+| 2.1 MP | 1080 × 1920 | The default: sharp |
+| 3.7 MP | 1440 × 2560 | Very sharp, heavier |
+| 8.3 MP | 2160 × 3840 (4K) | Maximum detail; heavy looks can stutter |
+
+Photos and videos are saved at that size. **Smooth mode** (on by default) watches how hard the GPU is working. When a look is too heavy to keep up, it lowers the live preview's resolution in steps, and raises it again once there's room. Photos are still captured at the full resolution you chose. Turn on **Show frame rate** to see the frame rate, megapixels and GPU time live.
+
 You can also capture photos and (silent) videos to your library, preview looks on a still photo, tweak every parameter with sliders and color pickers, reorder or add passes, edit the Metal code in the app, and share looks as `.shade` files.
 
 ## Install it on your iPhone (sideloading)
@@ -125,7 +137,7 @@ Shade/                       the iOS app
   Views/, Support/           SwiftUI screens and helpers
 ```
 
-- **Rendering.** Camera frames become Metal textures without a copy. They run through each pass into half-float ping-pong textures, then go to the screen, a photo or an H.264 video. Each pass is wrapped in generated Metal source and compiled **at runtime** with `MTLDevice.makeLibrary(source:)`. That's what lets Claude-written shaders run without rebuilding the app. One thread-safe pipeline cache is shared by the renderer and by AI validation.
+- **Rendering.** Rendering runs on its own thread and draws straight into a `CAMetalLayer`, so the interface never waits for the GPU. Each camera frame is rendered exactly once. At most two frames are on the GPU at a time, and when the GPU falls behind, the newest frame is dropped rather than queued, so delay never builds up. Compiled shaders are cached by structure, so moving a slider only uploads new numbers. Camera frames become Metal textures without a copy. They run through each pass into half-float ping-pong textures, then go to the screen, a photo or an H.264 video. Each pass is wrapped in generated Metal source and compiled **at runtime** with `MTLDevice.makeLibrary(source:)`. That's what lets Claude-written shaders run without rebuilding the app. One thread-safe pipeline cache is shared by the renderer and by AI validation.
 - **Trust boundary.** Everything from outside the app goes through `RecipeCodec` and `RecipeValidator` before use: files, the clipboard and Claude's replies. That covers size limits (1 MB input, 16 passes, 32 params, 20k characters of code per pass), the format version, effect names and safe parameter identifiers. Custom code only ever runs on the GPU, with read access to the camera image and nothing else. If a pass crashes the GPU (for example, an endless loop), the renderer turns custom passes off and says so.
 - **Storage.** Recipes are one `.shade` file each in `Documents/Recipes`, written atomically. Files that can't be read are listed in the Library with the reason, never silently dropped. The on-screen look, including unsaved edits, is saved to `Application Support/Shade/state.json` shortly after you stop editing, and immediately when the app goes to the background. The API key lives in the Keychain (this device only).
 - **Claude.** The client retries 408/429/5xx/529 and network drops with exponential backoff and jitter, honouring `retry-after`, at one layer only. It never retries 4xx errors. Errors carry stable codes (`ShadeError.Code`) and request IDs for the logs.

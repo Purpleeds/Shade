@@ -20,6 +20,7 @@ final class CameraService: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     private let output = AVCaptureVideoDataOutput()
     private var configured = false
     private var position: AVCaptureDevice.Position = .back
+    private var tier: CaptureTier = ProcessingResolution.defaultValue.captureTier
     private var restartAttempts = 0
     private let log = Log.camera
 
@@ -68,6 +69,20 @@ final class CameraService: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         startSession()
     }
 
+    /// Picks the camera stream size. Reconfigures a running session; takes effect on start otherwise.
+    func setCaptureTier(_ newTier: CaptureTier) {
+        queue.async {
+            guard newTier != self.tier else { return }
+            self.tier = newTier
+            guard self.configured else { return }
+            do {
+                try self.configure()
+            } catch {
+                self.fail(error)
+            }
+        }
+    }
+
     func flip() {
         queue.async {
             self.position = self.position == .back ? .front : .back
@@ -100,8 +115,16 @@ final class CameraService: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         session.beginConfiguration()
         defer { session.commitConfiguration() }
 
-        session.sessionPreset = session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
+        // Ask for the chosen size, falling back to smaller streams when a camera (e.g. the front one) can't do it.
+        let wanted: [AVCaptureSession.Preset]
+        switch tier {
+        case .hd720: wanted = [.hd1280x720, .high]
+        case .hd1080: wanted = [.hd1920x1080, .hd1280x720, .high]
+        case .uhd4K: wanted = [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
+        }
 
+        // Use a preset every camera supports while swapping inputs, so a 4K session can switch to a front camera.
+        if session.canSetSessionPreset(.high) { session.sessionPreset = .high }
         for input in session.inputs { session.removeInput(input) }
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
                 ?? AVCaptureDevice.default(for: .video) else {
@@ -117,6 +140,7 @@ final class CameraService: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             throw ShadeError(.cameraUnavailable, "The camera is busy.", detail: "canAddInput false")
         }
         session.addInput(input)
+        session.sessionPreset = wanted.first(where: session.canSetSessionPreset) ?? .high
 
         if !session.outputs.contains(output) {
             output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
@@ -140,7 +164,7 @@ final class CameraService: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             }
         }
         configured = true
-        log.info("configured \(position == .front ? "front" : "back") camera")
+        log.info("configured \(position == .front ? "front" : "back") camera, preset \(session.sessionPreset.rawValue)")
     }
 
     // MARK: Notifications

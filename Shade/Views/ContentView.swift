@@ -45,6 +45,7 @@ struct ContentView: View {
 
             VStack(spacing: 10) {
                 topBar
+                if let stats = model.stats { statsReadout(stats) }
                 if !model.compileErrors.isEmpty { errorBanner }
                 Spacer()
                 if let toast = model.toast {
@@ -79,12 +80,16 @@ struct ContentView: View {
             }
         }
         .sheet(item: $sheet) { which in
-            switch which {
-            case .library: LibraryView()
-            case .adjust: AdjustView().presentationDetents([.medium, .large])
-            case .create: CreateView()
-            case .settings: SettingsView()
+            Group {
+                switch which {
+                case .library: LibraryView()
+                case .adjust: AdjustView().presentationDetents([.medium, .large])
+                case .create: CreateView()
+                case .settings: SettingsView()
+                }
             }
+            .environmentObject(model)
+            .environmentObject(looks)
         }
         .alert("Something went wrong", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
             Button("OK", role: .cancel) {}
@@ -117,6 +122,7 @@ struct ContentView: View {
                         .background(.ultraThinMaterial, in: Capsule())
                 }
             }
+            resolutionMenu
             PhotosPicker(selection: $sourceItem, matching: .images) {
                 Image(systemName: "photo")
                     .frame(width: 38, height: 38)
@@ -198,6 +204,41 @@ struct ContentView: View {
     }
 
     // MARK: Quick controls
+
+    /// Quick megapixel switch in the top bar.
+    private var resolutionMenu: some View {
+        Menu {
+            Picker("Resolution", selection: $model.resolution) {
+                ForEach(ProcessingResolution.allCases) { option in
+                    Text("\(option.megapixelLabel) · \(option.note)").tag(option)
+                }
+            }
+            Toggle("Smooth mode", isOn: $model.smoothMode)
+        } label: {
+            Text(model.resolution.megapixelLabel)
+                .font(.caption.weight(.bold).monospacedDigit())
+                .padding(.horizontal, 10)
+                .frame(height: 38)
+                .background(.ultraThinMaterial, in: Capsule())
+        }
+        .accessibilityLabel("Resolution \(model.resolution.megapixelLabel)")
+    }
+
+    private func statsReadout(_ stats: RenderStats) -> some View {
+        HStack(spacing: 8) {
+            Text(String(format: "%.0f fps", stats.fps))
+            Text(String(format: "%.1f MP", stats.processingSize.megapixels))
+            Text(String(format: "GPU %.0f ms", stats.gpuMilliseconds))
+            if stats.scale < 1 { Text("smooth \(Int((stats.scale * 100).rounded()))%") }
+            if stats.droppedFrames > 0 { Text("\(stats.droppedFrames) dropped") }
+        }
+        .font(.caption2.monospacedDigit().weight(.semibold))
+        .foregroundStyle(stats.fps < 24 ? Color.yellow : Color.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
     private var intensityRow: some View {
         HStack(spacing: 10) {

@@ -31,6 +31,34 @@ final class AppModel: ObservableObject {
     /// Problems the user should read. Shown as an alert.
     @Published var alert: ShadeError?
 
+    // MARK: Performance settings (persisted)
+
+    /// How many megapixels to process, capture and save.
+    @Published var resolution: ProcessingResolution {
+        didSet {
+            UserDefaults.standard.set(resolution.rawValue, forKey: ProcessingResolution.defaultsKey)
+            applyResolution()
+        }
+    }
+    /// Lowers the preview resolution automatically while a look is too heavy to stay smooth.
+    @Published var smoothMode: Bool {
+        didSet {
+            UserDefaults.standard.set(smoothMode, forKey: AppModel.smoothModeKey)
+            renderer?.setSmoothMode(smoothMode)
+        }
+    }
+    /// Shows frame rate and resolution over the preview.
+    @Published var showStats: Bool {
+        didSet {
+            UserDefaults.standard.set(showStats, forKey: AppModel.showStatsKey)
+            connectStats()
+        }
+    }
+    @Published private(set) var stats: RenderStats?
+
+    static let smoothModeKey = "smoothMode"
+    static let showStatsKey = "showStats"
+
     let looks: LookStore
     let renderer: Renderer?
     let camera = CameraService()
@@ -41,6 +69,10 @@ final class AppModel: ObservableObject {
     init() {
         TemporaryFiles.sweep()
         looks = LookStore()
+        let defaults = UserDefaults.standard
+        resolution = ProcessingResolution(storedValue: defaults.string(forKey: ProcessingResolution.defaultsKey))
+        smoothMode = defaults.object(forKey: AppModel.smoothModeKey) as? Bool ?? true
+        showStats = defaults.bool(forKey: AppModel.showStatsKey)
 
         var renderer: Renderer?
         var startupError: ShadeError?
@@ -55,8 +87,8 @@ final class AppModel: ObservableObject {
         }
         self.renderer = renderer
 
-        if let problems = Optional(looks.libraryProblems), !problems.isEmpty {
-            Log.storage.warning("\(problems.count) library file(s) could not be loaded")
+        if !looks.libraryProblems.isEmpty {
+            Log.storage.warning("\(looks.libraryProblems.count) library file(s) could not be loaded")
         }
         looks.onStorageError = { [weak self] error in self?.alert = error }
 
@@ -86,6 +118,24 @@ final class AppModel: ObservableObject {
             .removeDuplicates()
             .sink { [weak renderer] recipe in renderer?.setRecipe(recipe) }
             .store(in: &cancellables)
+
+        renderer.setSmoothMode(smoothMode)
+        applyResolution()
+        connectStats()
+    }
+
+    private func applyResolution() {
+        renderer?.setResolution(resolution)
+        camera.setCaptureTier(resolution.captureTier)
+    }
+
+    private func connectStats() {
+        if showStats {
+            renderer?.onStats = { [weak self] stats in self?.stats = stats }
+        } else {
+            renderer?.onStats = nil
+            stats = nil
+        }
     }
 
     /// The GPU compiler, shared with AI generation so validated shaders are reused.
@@ -147,7 +197,7 @@ final class AppModel: ObservableObject {
 
     /// Hold-to-compare: shows the untouched camera while true.
     func setComparing(_ comparing: Bool) {
-        renderer?.bypass = comparing
+        renderer?.setBypass(comparing)
     }
 
     /// Handles a tap on the preview. Returns the image coordinate used if the look has a focus point.

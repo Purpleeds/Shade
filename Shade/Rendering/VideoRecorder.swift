@@ -12,7 +12,7 @@ import ShadeCore
 /// - Recordings are capped at `maximumDuration` so a forgotten recording can't fill the phone.
 /// - The temp file is deleted on cancel and after saving (by `PhotoLibrarySaver`).
 ///
-/// Threading: `encodeFrame` runs on the main thread (render loop); appends happen on a private serial queue.
+/// Threading: `encodeFrame` runs on the renderer's render queue; appends happen on a private serial queue.
 final class VideoRecorder {
     static let minimumFreeBytes: Int64 = 300_000_000
     static let maximumDuration: TimeInterval = 10 * 60

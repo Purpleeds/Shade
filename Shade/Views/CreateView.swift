@@ -64,7 +64,7 @@ struct CreateView: View {
                 }
             }
             .onChange(of: items) { newItems in loadMedia(newItems) }
-            .sheet(isPresented: $showSettings, onDismiss: { hasAPIKey = KeychainSecretStore.claudeAPIKey.hasValue }) { SettingsView() }
+            .sheet(isPresented: $showSettings, onDismiss: { hasAPIKey = KeychainSecretStore.claudeAPIKey.hasValue }) { SettingsView().environmentObject(model) }
             .onDisappear { generation.cancel() }
         }
     }

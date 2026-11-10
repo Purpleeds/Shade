@@ -152,6 +152,22 @@ public enum ShaderSource {
         return nil
     }
 
+    /// Identifies everything that affects the generated source (code + parameter names and types), but not
+    /// parameter values. Two passes with the same key share a compiled pipeline, so moving a slider
+    /// never rebuilds or re-hashes shader source.
+    public static func structureKey(for pass: ShaderPass) -> String? {
+        let body: String
+        if let fx = pass.builtInEffect {
+            body = "fx:" + fx.id
+        } else if let code = pass.code, pass.hasCustomCode {
+            body = "code:" + code
+        } else {
+            return nil
+        }
+        let layout = pass.params.map { "\($0.name):\($0.kind.rawValue)" }.joined(separator: ",")
+        return body + "|" + layout
+    }
+
     /// Complete, compilable MSL for one pass. Errors inside the pass code are reported as `shade:<line>:<col>`.
     public static func source(for pass: ShaderPass) -> String? {
         guard let code = userCode(for: pass) else { return nil }

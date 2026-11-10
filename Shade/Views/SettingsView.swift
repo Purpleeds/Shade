@@ -2,6 +2,7 @@ import ShadeCore
 import SwiftUI
 
 struct SettingsView: View {
+    @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @AppStorage(GenerationSettings.modelDefaultsKey) private var claudeModel = GenerationSettings.defaultModel
     @AppStorage(GenerationSettings.effortDefaultsKey) private var claudeEffort = GenerationSettings.defaultEffort
@@ -48,6 +49,21 @@ struct SettingsView: View {
                     Text("Shader generation")
                 } footer: {
                     Text("Higher effort thinks longer: better shaders, slower and pricier. High is a good balance.")
+                }
+
+                Section {
+                    Picker("Resolution", selection: $model.resolution) {
+                        ForEach(ProcessingResolution.allCases) { option in
+                            Text("\(option.megapixelLabel) · \(option.dimensionsLabel)").tag(option)
+                        }
+                    }
+                    Text(model.resolution.note).font(.caption).foregroundStyle(.secondary)
+                    Toggle("Smooth mode", isOn: $model.smoothMode)
+                    Toggle("Show frame rate", isOn: $model.showStats)
+                } header: {
+                    Text("Camera & performance")
+                } footer: {
+                    Text("Photos and videos are saved at the resolution you pick. Higher is sharper but makes heavy looks work harder. Smooth mode lowers the live preview's resolution while a look is too heavy, and still saves photos at full resolution.")
                 }
 
                 Section("About") {
